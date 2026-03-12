@@ -4,9 +4,21 @@ use crate::models::Measurement;
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Floor {
     pub name: String,
-    /// Path to the floor plan image (PNG/JPG)
+    /// Path to the imported floor plan image (PNG/JPG)
     pub image_path: Option<String>,
+    /// Path to the freehand drawing canvas PNG
+    #[serde(default)]
+    pub drawing_path: Option<String>,
     pub measurements: Vec<Measurement>,
+    /// Calibrated scale: pixels per meter (relative to image dimensions)
+    #[serde(default)]
+    pub scale_px_per_m: Option<f64>,
+    /// Calibration point A (relative coords 0..1)
+    #[serde(default)]
+    pub calib_point_a: Option<(f64, f64)>,
+    /// Calibration point B (relative coords 0..1)
+    #[serde(default)]
+    pub calib_point_b: Option<(f64, f64)>,
 }
 
 impl Floor {
@@ -14,7 +26,11 @@ impl Floor {
         Self {
             name: name.into(),
             image_path: None,
+            drawing_path: None,
             measurements: Vec::new(),
+            scale_px_per_m: None,
+            calib_point_a: None,
+            calib_point_b: None,
         }
     }
 
@@ -26,3 +42,6 @@ impl Floor {
         self.measurements.retain(|m| m.id != id);
     }
 }
+
+
+

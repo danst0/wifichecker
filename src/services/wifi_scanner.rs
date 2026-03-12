@@ -15,9 +15,10 @@ pub struct WifiScanner;
 
 impl WifiScanner {
     /// Query the currently connected WiFi access point via nmcli.
+    /// Uses IN-USE field (* = active) which is locale-independent.
     pub fn scan() -> Result<Option<WifiInfo>> {
         let output = Command::new("nmcli")
-            .args(["-t", "-f", "ACTIVE,SSID,BSSID,FREQ,SIGNAL,CHAN", "dev", "wifi"])
+            .args(["-t", "-f", "IN-USE,SSID,BSSID,FREQ,SIGNAL,CHAN", "dev", "wifi", "list"])
             .output()
             .context("Failed to run nmcli – is NetworkManager installed?")?;
 
@@ -25,7 +26,8 @@ impl WifiScanner {
 
         for line in text.lines() {
             let fields = parse_terse_line(line);
-            if fields.first().map(|s| s.as_str()) != Some("yes") {
+            // IN-USE field is "*" when this is the active connection
+            if fields.first().map(|s| s.trim()) != Some("*") {
                 continue;
             }
 
@@ -42,7 +44,7 @@ impl WifiScanner {
                 .and_then(|s| s.parse().ok())
                 .unwrap_or(2412);
 
-            // Signal is 0-100 quality; convert to dBm
+            // nmcli SIGNAL is 0–100 quality; approximate dBm conversion
             let quality: i32 = signal_str.trim().parse().unwrap_or(0);
             let signal_dbm = (quality / 2) - 100;
 
@@ -63,7 +65,6 @@ impl WifiScanner {
 }
 
 /// Parse a nmcli terse-mode line, respecting `\:` escape sequences.
-/// nmcli escapes literal colons in values as `\:` when the separator is `:`.
 fn parse_terse_line(line: &str) -> Vec<String> {
     let mut fields = Vec::new();
     let mut current = String::new();
@@ -84,5 +85,4 @@ fn parse_terse_line(line: &str) -> Vec<String> {
     fields.push(current);
     fields
 }
-
 
