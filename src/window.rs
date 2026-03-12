@@ -397,18 +397,32 @@ fn build_ui(
     {
         let state = state.clone();
         let floor_model = floor_model.clone();
+        let floor_dropdown = floor_dropdown.clone();
         let fp = floor_plan.clone();
         let panel = panel.clone();
         let overlay_ref = overlay.clone();
         add_floor_btn.connect_clicked(move |_| {
-            let mut s = state.borrow_mut();
-            let name = format!("Floor {}", s.project.floors.len() + 1);
-            s.project.add_floor(Floor::new(&name));
+            // Compute name + add to project, then DROP the borrow before touching the model
+            let (name, new_idx) = {
+                let mut s = state.borrow_mut();
+                let name = format!("Floor {}", s.project.floors.len() + 1);
+                s.project.add_floor(Floor::new(&name));
+                s.current_floor = s.project.floors.len() - 1;
+                (name, s.current_floor)
+            }; // borrow released here
+
             floor_model.append(&name);
-            s.current_floor = s.project.floors.len() - 1;
-            fp.set_measurements(vec![]);
-            panel.set_measurements(vec![]);
-            overlay_ref.add_toast(Toast::new(&format!("Added: {}", name)));
+            // Explicitly select the new floor; this fires connect_selected_notify
+            // which will load measurements/canvas. If already at this index
+            // (first floor: 0→0), also update manually.
+            if floor_dropdown.selected() as usize == new_idx {
+                fp.set_measurements(vec![]);
+                fp.set_image("");
+                panel.set_measurements(vec![]);
+            } else {
+                floor_dropdown.set_selected(new_idx as u32);
+            }
+            overlay_ref.add_toast(Toast::new(&format!("Added: {name}")));
         });
     }
 
@@ -614,6 +628,18 @@ fn build_ui(
             });
             dlg.window.present();
         });
+    }
+
+    // ── Initialize with one default floor ─────────────────────────────────────
+    {
+        let mut s = state.borrow_mut();
+        s.project.add_floor(Floor::new("Floor 1"));
+        s.current_floor = 0;
+        drop(s);
+        floor_model.append("Floor 1");
+        // selected_notify fires for index 0 → 0 (no change), so update manually
+        floor_plan.set_measurements(vec![]);
+        panel.set_measurements(vec![]);
     }
 
     overlay
