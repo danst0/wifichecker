@@ -1,5 +1,5 @@
 use gtk4::prelude::*;
-use gtk4::{Box as GtkBox, Button, Label, ListBox, ListBoxRow, Orientation, ScrolledWindow};
+use gtk4::{Box as GtkBox, Button, Label, ListBox, ListBoxRow, Orientation, ScrolledWindow, Spinner};
 use libadwaita::prelude::*;
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -9,6 +9,9 @@ use crate::models::Measurement;
 pub struct MeasurementPanel {
     pub widget: GtkBox,
     current_label: Label,
+    status_box: GtkBox,
+    spinner: Spinner,
+    status_label: Label,
     list: ListBox,
     measurements: Rc<RefCell<Vec<Measurement>>>,
     on_delete: Rc<RefCell<Option<Box<dyn Fn(String)>>>>,
@@ -34,6 +37,19 @@ impl MeasurementPanel {
         current_group.add(&current_label);
         vbox.append(&current_group);
 
+        // Spinner / status row (shown while measuring)
+        let status_box = GtkBox::new(Orientation::Horizontal, 8);
+        status_box.set_margin_start(4);
+        status_box.set_margin_bottom(4);
+        let spinner = Spinner::new();
+        let status_label = Label::new(None);
+        status_label.add_css_class("caption");
+        status_label.set_xalign(0.0);
+        status_box.append(&spinner);
+        status_box.append(&status_label);
+        status_box.set_visible(false);
+        vbox.append(&status_box);
+
         // Measurements list
         let list_group = libadwaita::PreferencesGroup::new();
         list_group.set_title("Measurements");
@@ -56,19 +72,49 @@ impl MeasurementPanel {
         Self {
             widget: vbox,
             current_label,
+            status_box,
+            spinner,
+            status_label,
             list,
             measurements,
             on_delete,
         }
     }
 
-    pub fn update_current_wifi(&self, ssid: &str, bssid: &str, dbm: i32, freq: u32, channel: u8) {
+    /// Show or hide the measuring spinner with a status message.
+    pub fn set_measuring(&self, active: bool, msg: &str) {
+        if active {
+            self.spinner.start();
+            self.status_label.set_label(msg);
+            self.status_box.set_visible(true);
+        } else {
+            self.spinner.stop();
+            self.status_box.set_visible(false);
+        }
+    }
+
+    pub fn update_current_wifi(
+        &self,
+        ssid: &str,
+        bssid: &str,
+        dbm: i32,
+        freq: u32,
+        channel: u8,
+        iperf_mbps: Option<f64>,
+        smb_mbps: Option<f64>,
+    ) {
         let band = if freq >= 5000 { "5 GHz" } else { "2.4 GHz" };
         let quality = signal_quality_str(dbm);
-        let text = format!(
+        let mut text = format!(
             "SSID: {}\nBSSID: {}\nSignal: {} dBm ({})\nBand: {} | Ch: {}",
             ssid, bssid, dbm, quality, band, channel
         );
+        if let Some(mbps) = iperf_mbps {
+            text.push_str(&format!("\niperf3: {:.1} Mbps", mbps));
+        }
+        if let Some(mbps) = smb_mbps {
+            text.push_str(&format!("\nSamba: {:.1} Mbps", mbps));
+        }
         self.current_label.set_label(&text);
     }
 
@@ -89,7 +135,6 @@ impl MeasurementPanel {
         while let Some(child) = self.list.first_child() {
             self.list.remove(&child);
         }
-
         for m in measurements.iter().rev() {
             let row = self.make_row(m);
             self.list.append(&row);
@@ -103,12 +148,18 @@ impl MeasurementPanel {
         hbox.set_margin_top(4);
         hbox.set_margin_bottom(4);
 
-        let info = Label::new(Some(&format!(
+        let mut info_str = format!(
             "{} | {} dBm | {}",
-            m.ssid,
-            m.signal_dbm,
+            m.ssid, m.signal_dbm,
             m.timestamp.format("%H:%M:%S")
-        )));
+        );
+        if let Some(mbps) = m.iperf_mbps {
+            info_str.push_str(&format!(" | ⚡{:.0} Mbps", mbps));
+        } else if let Some(mbps) = m.smb_mbps {
+            info_str.push_str(&format!(" | 🗂{:.0} Mbps", mbps));
+        }
+
+        let info = Label::new(Some(&info_str));
         info.set_hexpand(true);
         info.set_xalign(0.0);
         info.set_ellipsize(gtk4::pango::EllipsizeMode::End);
@@ -136,10 +187,10 @@ impl MeasurementPanel {
 
 fn signal_quality_str(dbm: i32) -> &'static str {
     match dbm {
-        -50..=0 => "Excellent",
+        -50..=0   => "Excellent",
         -60..=-51 => "Good",
         -70..=-61 => "Fair",
         -80..=-71 => "Poor",
-        _ => "No signal",
+        _         => "No signal",
     }
 }

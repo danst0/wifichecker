@@ -1,23 +1,22 @@
 use anyhow::{Context, Result};
-use std::net::IpAddr;
 use std::process::Command;
 
 pub struct IperfClient {
-    pub server: IpAddr,
+    pub server: String,
     pub port: u16,
     pub duration_secs: u32,
 }
 
 impl IperfClient {
-    pub fn new(server: IpAddr) -> Self {
-        Self { server, port: 5201, duration_secs: 5 }
+    pub fn new(server: impl Into<String>, port: u16, duration_secs: u32) -> Self {
+        Self { server: server.into(), port, duration_secs }
     }
 
     /// Run iperf3 test (blocking). Returns throughput in Mbps.
     pub fn run_test(&self) -> Result<f64> {
         let output = Command::new("iperf3")
             .args([
-                "-c", &self.server.to_string(),
+                "-c", &self.server,
                 "-p", &self.port.to_string(),
                 "-t", &self.duration_secs.to_string(),
                 "-J",
@@ -39,5 +38,3 @@ impl IperfClient {
         Ok(bps / 1_000_000.0)
     }
 }
-
-

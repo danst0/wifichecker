@@ -12,9 +12,17 @@ use std::rc::Rc;
 use crate::models::{AppSettings, Floor, Measurement, Project};
 use crate::persistence::{JsonStore, SettingsStore};
 use crate::persistence::json_store::{drawings_dir, ensure_config_dirs};
-use crate::services::{WifiInfo, WifiScanner};
+use crate::services::{IperfClient, SmbTester, WifiInfo, WifiScanner};
 use crate::widgets::{FloorPlanView, MeasurementPanel, SettingsDialog};
 use crate::widgets::floor_plan_view::DrawMode;
+
+struct MeasureResult {
+    rx: f64,
+    ry: f64,
+    wifi: Option<WifiInfo>,
+    iperf_mbps: Option<f64>,
+    smb_mbps: Option<f64>,
+}
 
 pub struct Window {
     pub window: ApplicationWindow,
@@ -173,13 +181,6 @@ fn build_ui(
 
     let panel = MeasurementPanel::new();
 
-    let measure_btn = Button::with_label("📡 Measure here");
-    measure_btn.add_css_class("suggested-action");
-    measure_btn.set_margin_start(6);
-    measure_btn.set_margin_end(6);
-    measure_btn.set_margin_top(6);
-
-    sidebar.append(&measure_btn);
     sidebar.append(&panel.widget);
     body.append(&sidebar);
     main_box.append(&body);
@@ -260,65 +261,94 @@ fn build_ui(
     }
 
     // Measure button — WiFi scan in background thread
+    // ── on_measure_click: click on map = immediate full measurement ───────────
     {
         let state = state.clone();
         let fp = floor_plan.clone();
         let panel = panel.clone();
         let overlay_ref = overlay.clone();
+        let settings = settings.clone();
 
-        measure_btn.connect_clicked(move |_| {
-            let (tx, rx) = async_channel::bounded::<anyhow::Result<Option<WifiInfo>>>(1);
-            std::thread::spawn(move || { tx.send_blocking(WifiScanner::scan()).ok(); });
+        floor_plan.set_on_measure_click(move |rx, ry| {
+            // Extract settings values (must be Send-safe primitives)
+            let (iperf_enabled, iperf_server, iperf_port, iperf_dur,
+                 smb_enabled, smb_server, smb_share, smb_user, smb_pass) = {
+                let s = settings.borrow();
+                (
+                    s.iperf_enabled, s.iperf_server.clone(), s.iperf_port, s.iperf_duration_secs,
+                    s.smb_enabled, s.smb_server.clone(), s.smb_share.clone(),
+                    s.smb_username.clone(), s.smb_password.clone(),
+                )
+            };
+
+            let panel2 = panel.clone();
+            panel2.set_measuring(true, "Scanning WiFi…");
+
+            let (tx, recv) = async_channel::bounded::<MeasureResult>(1);
+            std::thread::spawn(move || {
+                let wifi = WifiScanner::scan().ok().flatten();
+
+                let iperf_mbps = if iperf_enabled && !iperf_server.is_empty() {
+                    IperfClient::new(&iperf_server, iperf_port, iperf_dur)
+                        .run_test().ok()
+                } else {
+                    None
+                };
+
+                let smb_mbps = if smb_enabled && !smb_server.is_empty() {
+                    let mut tester = SmbTester::new(&smb_server, &smb_share);
+                    tester.username = if smb_user.is_empty() { None } else { Some(smb_user) };
+                    tester.password = if smb_pass.is_empty() { None } else { Some(smb_pass) };
+                    tester.run_test().ok()
+                } else {
+                    None
+                };
+
+                tx.send_blocking(MeasureResult { rx, ry, wifi, iperf_mbps, smb_mbps }).ok();
+            });
 
             let state2 = state.clone();
             let fp2 = fp.clone();
-            let panel2 = panel.clone();
+            let panel3 = panel.clone();
             let overlay2 = overlay_ref.clone();
 
             glib::spawn_future_local(async move {
-                if let Ok(result) = rx.recv().await {
-                    match result {
-                        Ok(Some(info)) => {
-                            let pos = LAST_CLICK_POS.with(|c| *c.borrow());
-                            let Some((rx_pos, ry_pos)) = pos else {
-                                overlay2.add_toast(Toast::new("Click on the floor plan first"));
-                                return;
-                            };
+                let Ok(result) = recv.recv().await else { return; };
+                panel3.set_measuring(false, "");
 
-                            let m = Measurement::new(
-                                rx_pos, ry_pos,
-                                info.ssid.clone(), info.bssid.clone(),
-                                info.frequency_mhz, info.channel, info.signal_dbm,
-                            );
-                            let mut s = state2.borrow_mut();
-                            let idx = s.current_floor;
-                            if let Some(floor) = s.project.floors.get_mut(idx) {
-                                floor.add_measurement(m);
-                                let measurements = floor.measurements.clone();
-                                drop(s);
-                                fp2.set_measurements(measurements.clone());
-                                panel2.set_measurements(measurements);
-                                panel2.update_current_wifi(
-                                    &info.ssid, &info.bssid,
-                                    info.signal_dbm, info.frequency_mhz, info.channel,
-                                );
-                                overlay2.add_toast(Toast::new(&format!(
-                                    "Measured: {} dBm on {}", info.signal_dbm, info.ssid
-                                )));
-                            }
-                        }
-                        Ok(None) => overlay2.add_toast(Toast::new("No active WiFi connection")),
-                        Err(e) => overlay2.add_toast(Toast::new(&format!("WiFi error: {e}"))),
+                let Some(info) = result.wifi else {
+                    overlay2.add_toast(Toast::new("No active WiFi connection"));
+                    return;
+                };
+
+                let mut m = Measurement::new(
+                    result.rx, result.ry,
+                    info.ssid.clone(), info.bssid.clone(),
+                    info.frequency_mhz, info.channel, info.signal_dbm,
+                );
+                m.iperf_mbps = result.iperf_mbps;
+                m.smb_mbps = result.smb_mbps;
+
+                let mut s = state2.borrow_mut();
+                let idx = s.current_floor;
+                if let Some(floor) = s.project.floors.get_mut(idx) {
+                    floor.add_measurement(m);
+                    let measurements = floor.measurements.clone();
+                    drop(s);
+                    fp2.set_measurements(measurements.clone());
+                    panel3.set_measurements(measurements);
+                    panel3.update_current_wifi(
+                        &info.ssid, &info.bssid,
+                        info.signal_dbm, info.frequency_mhz, info.channel,
+                        result.iperf_mbps, result.smb_mbps,
+                    );
+                    let mut toast_msg = format!("{} dBm | {}", info.signal_dbm, info.ssid);
+                    if let Some(mbps) = result.iperf_mbps {
+                        toast_msg.push_str(&format!(" | ⚡{:.1} Mbps", mbps));
                     }
+                    overlay2.add_toast(Toast::new(&toast_msg));
                 }
             });
-        });
-    }
-
-    // Measure click position tracking via thread-local
-    {
-        floor_plan.set_on_measure_click(move |rx, ry| {
-            LAST_CLICK_POS.with(|c| *c.borrow_mut() = Some((rx, ry)));
         });
     }
 
@@ -658,6 +688,3 @@ fn save_current_canvas(fp: &FloorPlanView, state: &Rc<RefCell<AppState>>) {
     }
 }
 
-thread_local! {
-    static LAST_CLICK_POS: RefCell<Option<(f64, f64)>> = RefCell::new(None);
-}
