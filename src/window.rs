@@ -40,10 +40,12 @@ impl Window {
         let _ = ensure_config_dirs();
         let settings = Rc::new(RefCell::new(SettingsStore::load()));
 
+        let project = JsonStore::load(&JsonStore::default_path())
+            .unwrap_or_else(|_| Project::new("My Project"));
+
         let state = Rc::new(RefCell::new(AppState {
-            project: Project::new("New Project"),
+            project,
             current_floor: 0,
-            save_path: None,
         }));
 
         let content = build_ui(&window, state.clone(), settings.clone());
@@ -56,7 +58,20 @@ impl Window {
 struct AppState {
     project: Project,
     current_floor: usize,
-    save_path: Option<std::path::PathBuf>,
+}
+
+/// Save the current floor's canvas PNG and persist the whole project to disk.
+fn auto_save(fp: &FloorPlanView, state: &Rc<RefCell<AppState>>) {
+    let idx = state.borrow().current_floor;
+    let canvas_path = drawings_dir().join(format!("floor_{idx}.png"));
+    if fp.save_canvas(&canvas_path).is_ok() {
+        let mut s = state.borrow_mut();
+        if let Some(floor) = s.project.floors.get_mut(idx) {
+            floor.drawing_path = Some(canvas_path.to_string_lossy().to_string());
+        }
+    }
+    let project = state.borrow().project.clone();
+    let _ = JsonStore::save(&project, &JsonStore::default_path());
 }
 
 fn build_ui(
@@ -84,14 +99,6 @@ fn build_ui(
     heatmap_toggle.set_tooltip_text(Some("Toggle heatmap"));
     heatmap_toggle.set_active(true);
     header.pack_end(&heatmap_toggle);
-
-    let save_btn = Button::from_icon_name("document-save-symbolic");
-    save_btn.set_tooltip_text(Some("Save project"));
-    header.pack_end(&save_btn);
-
-    let open_btn = Button::from_icon_name("document-open-symbolic");
-    open_btn.set_tooltip_text(Some("Open project"));
-    header.pack_end(&open_btn);
 
     let settings_btn = Button::from_icon_name("preferences-system-symbolic");
     settings_btn.set_tooltip_text(Some("Settings (iperf / Samba)"));
@@ -227,12 +234,14 @@ fn build_ui(
         let overlay_ref = overlay.clone();
         clear_canvas_btn.connect_clicked(move |_| {
             fp.clear_canvas();
-            // Remove drawing file from floor model
-            let mut s = state.borrow_mut();
-            let idx = s.current_floor;
-            if let Some(floor) = s.project.floors.get_mut(idx) {
-                floor.drawing_path = None;
+            {
+                let mut s = state.borrow_mut();
+                let idx = s.current_floor;
+                if let Some(floor) = s.project.floors.get_mut(idx) {
+                    floor.drawing_path = None;
+                }
             }
+            auto_save(&fp, &state);
             overlay_ref.add_toast(Toast::new("Drawing cleared"));
         });
     }
@@ -270,7 +279,6 @@ fn build_ui(
         let settings = settings.clone();
 
         floor_plan.set_on_measure_click(move |rx, ry| {
-            // Extract settings values (must be Send-safe primitives)
             let (iperf_enabled, iperf_server, iperf_port, iperf_dur,
                  smb_enabled, smb_server, smb_share, smb_user, smb_pass) = {
                 let s = settings.borrow();
@@ -329,25 +337,31 @@ fn build_ui(
                 m.iperf_mbps = result.iperf_mbps;
                 m.smb_mbps = result.smb_mbps;
 
-                let mut s = state2.borrow_mut();
-                let idx = s.current_floor;
-                if let Some(floor) = s.project.floors.get_mut(idx) {
-                    floor.add_measurement(m);
-                    let measurements = floor.measurements.clone();
-                    drop(s);
-                    fp2.set_measurements(measurements.clone());
-                    panel3.set_measurements(measurements);
-                    panel3.update_current_wifi(
-                        &info.ssid, &info.bssid,
-                        info.signal_dbm, info.frequency_mhz, info.channel,
-                        result.iperf_mbps, result.smb_mbps,
-                    );
-                    let mut toast_msg = format!("{} dBm | {}", info.signal_dbm, info.ssid);
-                    if let Some(mbps) = result.iperf_mbps {
-                        toast_msg.push_str(&format!(" | ⚡{:.1} Mbps", mbps));
+                let (measurements, panel_measurements) = {
+                    let mut s = state2.borrow_mut();
+                    let idx = s.current_floor;
+                    if let Some(floor) = s.project.floors.get_mut(idx) {
+                        floor.add_measurement(m);
+                        let measurements = floor.measurements.clone();
+                        (measurements.clone(), measurements)
+                    } else {
+                        return;
                     }
-                    overlay2.add_toast(Toast::new(&toast_msg));
+                };
+
+                fp2.set_measurements(measurements.clone());
+                panel3.set_measurements(panel_measurements);
+                panel3.update_current_wifi(
+                    &info.ssid, &info.bssid,
+                    info.signal_dbm, info.frequency_mhz, info.channel,
+                    result.iperf_mbps, result.smb_mbps,
+                );
+                auto_save(&fp2, &state2);
+                let mut toast_msg = format!("{} dBm | {}", info.signal_dbm, info.ssid);
+                if let Some(mbps) = result.iperf_mbps {
+                    toast_msg.push_str(&format!(" | ⚡{:.1} Mbps", mbps));
                 }
+                overlay2.add_toast(Toast::new(&toast_msg));
             });
         });
     }
@@ -370,7 +384,6 @@ fn build_ui(
             dialog.add_response("ok", "Set Scale");
             dialog.set_response_appearance("ok", libadwaita::ResponseAppearance::Suggested);
 
-            // Entry for distance
             let entry = gtk4::Entry::builder()
                 .placeholder_text("e.g. 3.5")
                 .input_purpose(gtk4::InputPurpose::Number)
@@ -393,13 +406,16 @@ fn build_ui(
 
                 fp2.set_scale(scale, (ax, ay), (bx, by));
 
-                let mut s = state2.borrow_mut();
-                let idx = s.current_floor;
-                if let Some(floor) = s.project.floors.get_mut(idx) {
-                    floor.scale_px_per_m = Some(scale);
-                    floor.calib_point_a = Some((ax, ay));
-                    floor.calib_point_b = Some((bx, by));
+                {
+                    let mut s = state2.borrow_mut();
+                    let idx = s.current_floor;
+                    if let Some(floor) = s.project.floors.get_mut(idx) {
+                        floor.scale_px_per_m = Some(scale);
+                        floor.calib_point_a = Some((ax, ay));
+                        floor.calib_point_b = Some((bx, by));
+                    }
                 }
+                auto_save(&fp2, &state2);
             });
         });
     }
@@ -411,15 +427,19 @@ fn build_ui(
         let panel = panel.clone();
         let panel2 = panel.clone();
         panel.set_on_delete(move |id| {
-            let mut s = state.borrow_mut();
-            let idx = s.current_floor;
-            if let Some(floor) = s.project.floors.get_mut(idx) {
-                floor.remove_measurement(&id);
-                let m = floor.measurements.clone();
-                drop(s);
-                fp.set_measurements(m.clone());
-                panel2.set_measurements(m);
-            }
+            let measurements = {
+                let mut s = state.borrow_mut();
+                let idx = s.current_floor;
+                if let Some(floor) = s.project.floors.get_mut(idx) {
+                    floor.remove_measurement(&id);
+                    floor.measurements.clone()
+                } else {
+                    return;
+                }
+            };
+            fp.set_measurements(measurements.clone());
+            panel2.set_measurements(measurements);
+            auto_save(&fp, &state);
         });
     }
 
@@ -432,19 +452,18 @@ fn build_ui(
         let panel = panel.clone();
         let overlay_ref = overlay.clone();
         add_floor_btn.connect_clicked(move |_| {
-            // Compute name + add to project, then DROP the borrow before touching the model
+            // Save current floor before switching
+            auto_save(&fp, &state);
+
             let (name, new_idx) = {
                 let mut s = state.borrow_mut();
                 let name = format!("Floor {}", s.project.floors.len() + 1);
                 s.project.add_floor(Floor::new(&name));
                 s.current_floor = s.project.floors.len() - 1;
                 (name, s.current_floor)
-            }; // borrow released here
+            };
 
             floor_model.append(&name);
-            // Explicitly select the new floor; this fires connect_selected_notify
-            // which will load measurements/canvas. If already at this index
-            // (first floor: 0→0), also update manually.
             if floor_dropdown.selected() as usize == new_idx {
                 fp.set_measurements(vec![]);
                 fp.set_image("");
@@ -452,6 +471,7 @@ fn build_ui(
             } else {
                 floor_dropdown.set_selected(new_idx as u32);
             }
+            auto_save(&fp, &state);
             overlay_ref.add_toast(Toast::new(&format!("Added: {name}")));
         });
     }
@@ -462,28 +482,34 @@ fn build_ui(
         let fp = floor_plan.clone();
         let panel = panel.clone();
         floor_dropdown.connect_selected_notify(move |dd| {
-            let idx = dd.selected() as usize;
-            let mut s = state.borrow_mut();
-            if idx < s.project.floors.len() {
-                s.current_floor = idx;
-                let floor = &s.project.floors[idx];
-                let measurements = floor.measurements.clone();
-                let image_path = floor.image_path.clone();
-                let drawing_path = floor.drawing_path.clone();
-                let scale = floor.scale_px_per_m;
-                let calib_a = floor.calib_point_a;
-                let calib_b = floor.calib_point_b;
-                drop(s);
-                if let Some(p) = image_path { fp.set_image(&p); }
-                if let Some(p) = drawing_path { fp.load_canvas(std::path::Path::new(&p)); }
-                if let (Some(s), Some(a), Some(b)) = (scale, calib_a, calib_b) {
-                    fp.set_scale(s, a, b);
-                } else {
-                    fp.set_scale_px_per_m(None);
-                }
-                fp.set_measurements(measurements.clone());
-                panel.set_measurements(measurements);
+            let new_idx = dd.selected() as usize;
+            // Auto-save the floor being left
+            auto_save(&fp, &state);
+
+            let (measurements, image_path, drawing_path, scale, calib_a, calib_b) = {
+                let mut s = state.borrow_mut();
+                if new_idx >= s.project.floors.len() { return; }
+                s.current_floor = new_idx;
+                let floor = &s.project.floors[new_idx];
+                (
+                    floor.measurements.clone(),
+                    floor.image_path.clone(),
+                    floor.drawing_path.clone(),
+                    floor.scale_px_per_m,
+                    floor.calib_point_a,
+                    floor.calib_point_b,
+                )
+            };
+
+            if let Some(p) = image_path { fp.set_image(&p); }
+            if let Some(p) = drawing_path { fp.load_canvas(std::path::Path::new(&p)); }
+            if let (Some(s), Some(a), Some(b)) = (scale, calib_a, calib_b) {
+                fp.set_scale(s, a, b);
+            } else {
+                fp.set_scale_px_per_m(None);
             }
+            fp.set_measurements(measurements.clone());
+            panel.set_measurements(measurements);
         });
     }
 
@@ -510,127 +536,16 @@ fn build_ui(
                 if let Ok(file) = result {
                     if let Some(path) = file.path() {
                         let path_str = path.to_string_lossy().to_string();
-                        let mut s = state2.borrow_mut();
-                        let idx = s.current_floor;
-                        if let Some(floor) = s.project.floors.get_mut(idx) {
-                            floor.image_path = Some(path_str.clone());
+                        {
+                            let mut s = state2.borrow_mut();
+                            let idx = s.current_floor;
+                            if let Some(floor) = s.project.floors.get_mut(idx) {
+                                floor.image_path = Some(path_str.clone());
+                            }
                         }
-                        drop(s);
                         fp2.set_image(&path_str);
+                        auto_save(&fp2, &state2);
                         overlay2.add_toast(Toast::new("Floor plan imported"));
-                    }
-                }
-            });
-        });
-    }
-
-    // Save — auto-save canvas before saving project
-    {
-        let state = state.clone();
-        let fp = floor_plan.clone();
-        let overlay_ref = overlay.clone();
-        let window_ref = window.clone();
-        save_btn.connect_clicked(move |_| {
-            // Save canvas first
-            save_current_canvas(&fp, &state);
-
-            let s = state.borrow();
-            if let Some(ref path) = s.save_path {
-                let path = path.clone();
-                let project = s.project.clone();
-                drop(s);
-                match JsonStore::save(&project, &path) {
-                    Ok(_) => overlay_ref.add_toast(Toast::new("Project saved")),
-                    Err(e) => overlay_ref.add_toast(Toast::new(&format!("Save error: {e}"))),
-                }
-                return;
-            }
-            drop(s);
-
-            let dialog = FileDialog::builder()
-                .title("Save Project")
-                .initial_name("project.json")
-                .modal(true)
-                .build();
-            let state2 = state.clone();
-            let overlay2 = overlay_ref.clone();
-            dialog.save(Some(&window_ref), gtk4::gio::Cancellable::NONE, move |result| {
-                if let Ok(file) = result {
-                    if let Some(path) = file.path() {
-                        let s = state2.borrow();
-                        match JsonStore::save(&s.project, &path) {
-                            Ok(_) => {
-                                drop(s);
-                                state2.borrow_mut().save_path = Some(path);
-                                overlay2.add_toast(Toast::new("Project saved"));
-                            }
-                            Err(e) => overlay2.add_toast(Toast::new(&format!("Save error: {e}"))),
-                        }
-                    }
-                }
-            });
-        });
-    }
-
-    // Open project
-    {
-        let state = state.clone();
-        let fp = floor_plan.clone();
-        let panel = panel.clone();
-        let floor_model = floor_model.clone();
-        let floor_dropdown = floor_dropdown.clone();
-        let overlay_ref = overlay.clone();
-        let window_ref = window.clone();
-        open_btn.connect_clicked(move |_| {
-            let dialog = FileDialog::builder().title("Open Project").modal(true).build();
-            let filter = gtk4::FileFilter::new();
-            filter.add_pattern("*.json");
-            filter.set_name(Some("WiFi Checker Project (*.json)"));
-            let filters = gtk4::gio::ListStore::new::<gtk4::FileFilter>();
-            filters.append(&filter);
-            dialog.set_filters(Some(&filters));
-
-            let state2 = state.clone();
-            let fp2 = fp.clone();
-            let panel2 = panel.clone();
-            let floor_model2 = floor_model.clone();
-            let floor_dd2 = floor_dropdown.clone();
-            let overlay2 = overlay_ref.clone();
-            dialog.open(Some(&window_ref), gtk4::gio::Cancellable::NONE, move |result| {
-                if let Ok(file) = result {
-                    if let Some(path) = file.path() {
-                        match JsonStore::load(&path) {
-                            Ok(project) => {
-                                while floor_model2.n_items() > 0 { floor_model2.remove(0); }
-                                for f in &project.floors { floor_model2.append(&f.name); }
-
-                                let mut s = state2.borrow_mut();
-                                s.save_path = Some(path);
-                                s.current_floor = 0;
-                                s.project = project;
-
-                                if let Some(floor) = s.project.floors.first() {
-                                    let m = floor.measurements.clone();
-                                    let img = floor.image_path.clone();
-                                    let drawing = floor.drawing_path.clone();
-                                    let scale = floor.scale_px_per_m;
-                                    let ca = floor.calib_point_a;
-                                    let cb = floor.calib_point_b;
-                                    drop(s);
-                                    if let Some(p) = img { fp2.set_image(&p); }
-                                    if let Some(p) = drawing { fp2.load_canvas(std::path::Path::new(&p)); }
-                                    if let (Some(sc), Some(a), Some(b)) = (scale, ca, cb) {
-                                        fp2.set_scale(sc, a, b);
-                                    }
-                                    fp2.set_measurements(m.clone());
-                                    panel2.set_measurements(m);
-                                    floor_dd2.set_selected(0);
-                                }
-
-                                overlay2.add_toast(Toast::new("Project loaded"));
-                            }
-                            Err(e) => overlay2.add_toast(Toast::new(&format!("Load error: {e}"))),
-                        }
                     }
                 }
             });
@@ -645,7 +560,6 @@ fn build_ui(
         let grid_toggle = grid_toggle.clone();
         settings_btn.connect_clicked(move |_| {
             let dlg = SettingsDialog::new(&window_ref, settings.clone());
-            // Sync grid state back when dialog closes
             let fp2 = fp.clone();
             let grid_toggle2 = grid_toggle.clone();
             let settings2 = settings.clone();
@@ -660,31 +574,44 @@ fn build_ui(
         });
     }
 
-    // ── Initialize with one default floor ─────────────────────────────────────
+    // ── Initialize from loaded project ────────────────────────────────────────
     {
         let mut s = state.borrow_mut();
-        s.project.add_floor(Floor::new("Floor 1"));
+        if s.project.floors.is_empty() {
+            s.project.add_floor(Floor::new("Floor 1"));
+        }
         s.current_floor = 0;
-        drop(s);
-        floor_model.append("Floor 1");
-        // selected_notify fires for index 0 → 0 (no change), so update manually
-        floor_plan.set_measurements(vec![]);
-        panel.set_measurements(vec![]);
+
+        for f in &s.project.floors {
+            floor_model.append(&f.name);
+        }
+
+        // Load first floor data
+        if let Some(floor) = s.project.floors.first() {
+            let measurements = floor.measurements.clone();
+            let image_path = floor.image_path.clone();
+            let drawing_path = floor.drawing_path.clone();
+            let scale = floor.scale_px_per_m;
+            let calib_a = floor.calib_point_a;
+            let calib_b = floor.calib_point_b;
+            drop(s);
+
+            if let Some(p) = image_path { floor_plan.set_image(&p); }
+            if let Some(p) = drawing_path { floor_plan.load_canvas(std::path::Path::new(&p)); }
+            if let (Some(sc), Some(a), Some(b)) = (scale, calib_a, calib_b) {
+                floor_plan.set_scale(sc, a, b);
+            }
+            floor_plan.set_measurements(measurements.clone());
+            panel.set_measurements(measurements);
+        } else {
+            drop(s);
+            floor_plan.set_measurements(vec![]);
+            panel.set_measurements(vec![]);
+        }
     }
+
+    // Auto-save if we just created the default floor
+    auto_save(&floor_plan, &state);
 
     overlay
 }
-
-/// Save the current floor's drawing canvas to the drawings directory.
-fn save_current_canvas(fp: &FloorPlanView, state: &Rc<RefCell<AppState>>) {
-    let idx = state.borrow().current_floor;
-    let drawings = drawings_dir();
-    let canvas_path = drawings.join(format!("floor_{idx}.png"));
-    if fp.save_canvas(&canvas_path).is_ok() {
-        let mut s = state.borrow_mut();
-        if let Some(floor) = s.project.floors.get_mut(idx) {
-            floor.drawing_path = Some(canvas_path.to_string_lossy().to_string());
-        }
-    }
-}
-
