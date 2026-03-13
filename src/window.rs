@@ -576,26 +576,32 @@ fn build_ui(
 
     // ── Initialize from loaded project ────────────────────────────────────────
     {
-        let mut s = state.borrow_mut();
-        if s.project.floors.is_empty() {
-            s.project.add_floor(Floor::new("Floor 1"));
+        // Collect all data needed, then release borrow before touching the model
+        let (floor_names, first_floor_data) = {
+            let mut s = state.borrow_mut();
+            if s.project.floors.is_empty() {
+                s.project.add_floor(Floor::new("Floor 1"));
+            }
+            s.current_floor = 0;
+            let names: Vec<String> = s.project.floors.iter().map(|f| f.name.clone()).collect();
+            let first = s.project.floors.first().map(|f| (
+                f.measurements.clone(),
+                f.image_path.clone(),
+                f.drawing_path.clone(),
+                f.scale_px_per_m,
+                f.calib_point_a,
+                f.calib_point_b,
+            ));
+            (names, first)
+        }; // state borrow fully released here
+
+        // Now safe to append — connect_selected_notify won't re-enter borrow
+        for name in &floor_names {
+            floor_model.append(name);
         }
-        s.current_floor = 0;
 
-        for f in &s.project.floors {
-            floor_model.append(&f.name);
-        }
-
-        // Load first floor data
-        if let Some(floor) = s.project.floors.first() {
-            let measurements = floor.measurements.clone();
-            let image_path = floor.image_path.clone();
-            let drawing_path = floor.drawing_path.clone();
-            let scale = floor.scale_px_per_m;
-            let calib_a = floor.calib_point_a;
-            let calib_b = floor.calib_point_b;
-            drop(s);
-
+        // Load first floor into view
+        if let Some((measurements, image_path, drawing_path, scale, calib_a, calib_b)) = first_floor_data {
             if let Some(p) = image_path { floor_plan.set_image(&p); }
             if let Some(p) = drawing_path { floor_plan.load_canvas(std::path::Path::new(&p)); }
             if let (Some(sc), Some(a), Some(b)) = (scale, calib_a, calib_b) {
@@ -604,7 +610,6 @@ fn build_ui(
             floor_plan.set_measurements(measurements.clone());
             panel.set_measurements(measurements);
         } else {
-            drop(s);
             floor_plan.set_measurements(vec![]);
             panel.set_measurements(vec![]);
         }
