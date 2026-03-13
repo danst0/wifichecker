@@ -3,7 +3,7 @@ use gtk4::{Box as GtkBox, Button, Label, ListBox, ListBoxRow, Orientation, Scrol
 use libadwaita::prelude::*;
 use std::cell::RefCell;
 use std::rc::Rc;
-use crate::models::Measurement;
+use crate::models::{Measurement, ThroughputUnit};
 
 #[derive(Clone)]
 pub struct MeasurementPanel {
@@ -15,6 +15,7 @@ pub struct MeasurementPanel {
     list: ListBox,
     measurements: Rc<RefCell<Vec<Measurement>>>,
     on_delete: Rc<RefCell<Option<Box<dyn Fn(String)>>>>,
+    unit: Rc<RefCell<ThroughputUnit>>,
 }
 
 impl MeasurementPanel {
@@ -78,6 +79,7 @@ impl MeasurementPanel {
             list,
             measurements,
             on_delete,
+            unit: Rc::new(RefCell::new(ThroughputUnit::Mbit)),
         }
     }
 
@@ -102,6 +104,7 @@ impl MeasurementPanel {
         channel: u8,
         iperf_mbps: Option<f64>,
         smb_mbps: Option<f64>,
+        unit: ThroughputUnit,
     ) {
         let band = if freq >= 5000 { "5 GHz" } else { "2.4 GHz" };
         let quality = signal_quality_str(dbm);
@@ -110,10 +113,10 @@ impl MeasurementPanel {
             ssid, bssid, dbm, quality, band, channel
         );
         if let Some(mbps) = iperf_mbps {
-            text.push_str(&format!("\niperf3: {:.1} Mbps", mbps));
+            text.push_str(&format!("\niperf3: {}", unit.format(mbps)));
         }
         if let Some(mbps) = smb_mbps {
-            text.push_str(&format!("\nSamba: {:.1} Mbps", mbps));
+            text.push_str(&format!("\nSamba: {}", unit.format(mbps)));
         }
         self.current_label.set_label(&text);
     }
@@ -129,6 +132,13 @@ impl MeasurementPanel {
 
     pub fn set_on_delete<F: Fn(String) + 'static>(&self, cb: F) {
         *self.on_delete.borrow_mut() = Some(Box::new(cb));
+    }
+
+    pub fn set_throughput_unit(&self, unit: ThroughputUnit) {
+        *self.unit.borrow_mut() = unit;
+        // Rebuild list with new unit
+        let measurements = self.measurements.borrow().clone();
+        self.rebuild_list(&measurements);
     }
 
     fn rebuild_list(&self, measurements: &[Measurement]) {
@@ -154,9 +164,9 @@ impl MeasurementPanel {
             m.timestamp.format("%H:%M:%S")
         );
         if let Some(mbps) = m.iperf_mbps {
-            info_str.push_str(&format!(" | ⚡{:.0} Mbps", mbps));
+            info_str.push_str(&format!(" | ⚡{}", self.unit.borrow().format_short(mbps)));
         } else if let Some(mbps) = m.smb_mbps {
-            info_str.push_str(&format!(" | 🗂{:.0} Mbps", mbps));
+            info_str.push_str(&format!(" | 🗂{}", self.unit.borrow().format_short(mbps)));
         }
 
         let info = Label::new(Some(&info_str));

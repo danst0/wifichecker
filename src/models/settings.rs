@@ -1,5 +1,32 @@
 use serde::{Deserialize, Serialize};
 
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub enum ThroughputUnit {
+    Mbit,
+    MByte,
+}
+
+impl Default for ThroughputUnit {
+    fn default() -> Self { ThroughputUnit::Mbit }
+}
+
+impl ThroughputUnit {
+    /// Format a Mbit/s value according to this unit.
+    pub fn format(&self, mbit_per_sec: f64) -> String {
+        match self {
+            ThroughputUnit::Mbit  => format!("{:.1} Mbit/s", mbit_per_sec),
+            ThroughputUnit::MByte => format!("{:.1} MB/s",   mbit_per_sec / 8.0),
+        }
+    }
+    /// Short label used in list rows.
+    pub fn format_short(&self, mbit_per_sec: f64) -> String {
+        match self {
+            ThroughputUnit::Mbit  => format!("{:.0} Mbit/s", mbit_per_sec),
+            ThroughputUnit::MByte => format!("{:.0} MB/s",   mbit_per_sec / 8.0),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AppSettings {
     // iperf3
@@ -18,6 +45,9 @@ pub struct AppSettings {
     // Grid
     pub show_grid: bool,
     pub grid_spacing_m: f64,
+
+    // Display
+    pub throughput_unit: ThroughputUnit,
 }
 
 impl Default for AppSettings {
@@ -36,6 +66,8 @@ impl Default for AppSettings {
 
             show_grid: true,
             grid_spacing_m: 1.0,
+
+            throughput_unit: ThroughputUnit::Mbit,
         }
     }
 }

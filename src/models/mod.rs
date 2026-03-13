@@ -7,4 +7,4 @@ pub mod settings;
 pub use floor::Floor;
 pub use measurement::Measurement;
 pub use project::Project;
-pub use settings::AppSettings;
+pub use settings::{AppSettings, ThroughputUnit};

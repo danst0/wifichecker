@@ -7,7 +7,7 @@ use libadwaita::{
 use std::cell::RefCell;
 use std::rc::Rc;
 
-use crate::models::AppSettings;
+use crate::models::{AppSettings, ThroughputUnit};
 use crate::persistence::SettingsStore;
 
 pub struct SettingsDialog {
@@ -116,9 +116,21 @@ impl SettingsDialog {
         grid_group.add(&grid_switch);
         grid_group.add(&spacing_row);
 
+        // ── Display group ─────────────────────────────────────────────────
+        let display_group = PreferencesGroup::new();
+        display_group.set_title("Display");
+        display_group.set_description(Some("How throughput values are shown"));
+
+        let unit_switch = SwitchRow::new();
+        unit_switch.set_title("Show throughput as MByte/s");
+        unit_switch.set_subtitle("Off = Mbit/s  |  On = MByte/s");
+        unit_switch.set_active(settings.borrow().throughput_unit == ThroughputUnit::MByte);
+        display_group.add(&unit_switch);
+
         page.add(&iperf_group);
         page.add(&smb_group);
         page.add(&grid_group);
+        page.add(&display_group);
         win.add(&page);
 
         // ── Save on close ─────────────────────────────────────────────────
@@ -134,6 +146,7 @@ impl SettingsDialog {
             let smb_user = smb_user.clone();
             let smb_pass = smb_pass.clone();
             let grid_switch = grid_switch.clone();
+            let unit_switch = unit_switch.clone();
 
             win.connect_close_request(move |_| {
                 let spacing_m = spacing_values[spacing_drop.selected() as usize];
@@ -149,6 +162,11 @@ impl SettingsDialog {
                 s.smb_password = smb_pass.text().to_string();
                 s.show_grid = grid_switch.is_active();
                 s.grid_spacing_m = spacing_m;
+                s.throughput_unit = if unit_switch.is_active() {
+                    ThroughputUnit::MByte
+                } else {
+                    ThroughputUnit::Mbit
+                };
                 let _ = SettingsStore::save(&s);
                 gtk4::glib::Propagation::Proceed
             });

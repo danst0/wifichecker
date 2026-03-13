@@ -280,12 +280,14 @@ fn build_ui(
 
         floor_plan.set_on_measure_click(move |rx, ry| {
             let (iperf_enabled, iperf_server, iperf_port, iperf_dur,
-                 smb_enabled, smb_server, smb_share, smb_user, smb_pass) = {
+                 smb_enabled, smb_server, smb_share, smb_user, smb_pass,
+                 unit) = {
                 let s = settings.borrow();
                 (
                     s.iperf_enabled, s.iperf_server.clone(), s.iperf_port, s.iperf_duration_secs,
                     s.smb_enabled, s.smb_server.clone(), s.smb_share.clone(),
                     s.smb_username.clone(), s.smb_password.clone(),
+                    s.throughput_unit,
                 )
             };
 
@@ -351,15 +353,16 @@ fn build_ui(
 
                 fp2.set_measurements(measurements.clone());
                 panel3.set_measurements(panel_measurements);
+                panel3.set_throughput_unit(unit);
                 panel3.update_current_wifi(
                     &info.ssid, &info.bssid,
                     info.signal_dbm, info.frequency_mhz, info.channel,
-                    result.iperf_mbps, result.smb_mbps,
+                    result.iperf_mbps, result.smb_mbps, unit,
                 );
                 auto_save(&fp2, &state2);
                 let mut toast_msg = format!("{} dBm | {}", info.signal_dbm, info.ssid);
                 if let Some(mbps) = result.iperf_mbps {
-                    toast_msg.push_str(&format!(" | ⚡{:.1} Mbps", mbps));
+                    toast_msg.push_str(&format!(" | ⚡{}", unit.format_short(mbps)));
                 }
                 overlay2.add_toast(Toast::new(&toast_msg));
             });
@@ -558,16 +561,19 @@ fn build_ui(
         let window_ref = window.clone();
         let fp = floor_plan.clone();
         let grid_toggle = grid_toggle.clone();
+        let panel_ref = panel.clone();
         settings_btn.connect_clicked(move |_| {
             let dlg = SettingsDialog::new(&window_ref, settings.clone());
             let fp2 = fp.clone();
             let grid_toggle2 = grid_toggle.clone();
             let settings2 = settings.clone();
+            let panel2 = panel_ref.clone();
             dlg.window.connect_close_request(move |_| {
                 let s = settings2.borrow();
                 fp2.set_show_grid(s.show_grid);
                 fp2.set_grid_spacing(s.grid_spacing_m);
                 grid_toggle2.set_active(s.show_grid);
+                panel2.set_throughput_unit(s.throughput_unit);
                 gtk4::glib::Propagation::Proceed
             });
             dlg.window.present();
@@ -617,6 +623,8 @@ fn build_ui(
 
     // Auto-save if we just created the default floor
     auto_save(&floor_plan, &state);
+    // Apply saved settings to panel
+    panel.set_throughput_unit(settings.borrow().throughput_unit);
 
     overlay
 }
