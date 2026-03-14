@@ -1,6 +1,6 @@
 app-id: io.github.danst0.wifichecker
 runtime: org.gnome.Platform
-runtime-version: '48'
+runtime-version: '49'
 sdk: org.gnome.Sdk
 sdk-extensions:
   - org.freedesktop.Sdk.Extension.rust-stable
@@ -26,6 +26,8 @@ build-options:
 modules:
   - name: iperf3
     buildsystem: autotools
+    build-options:
+      cflags: -Wno-incompatible-pointer-types
     # To update: download the tarball and run `sha256sum iperf-<version>.tar.gz`
     # Latest releases: https://downloads.es.net/pub/iperf/
     sources:
