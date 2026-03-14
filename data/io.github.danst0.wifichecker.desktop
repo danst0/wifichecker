@@ -1,0 +1,9 @@
+[Desktop Entry]
+Name=WiFi Checker
+Comment=WiFi signal strength analyzer and floor plan mapper
+Exec=wifichecker
+Icon=io.github.danst0.wifichecker
+Terminal=false
+Type=Application
+Categories=Network;GNOME;GTK;
+Keywords=wifi;signal;heatmap;network;floorplan;

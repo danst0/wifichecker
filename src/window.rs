@@ -21,7 +21,9 @@ struct MeasureResult {
     ry: f64,
     wifi: Option<WifiInfo>,
     iperf_mbps: Option<f64>,
+    iperf_error: Option<String>,
     smb_mbps: Option<f64>,
+    smb_error: Option<String>,
 }
 
 pub struct Window {
@@ -50,6 +52,22 @@ impl Window {
 
         let content = build_ui(&window, state.clone(), settings.clone());
         window.set_content(Some(&content));
+
+        // Ctrl+Q / Ctrl+W → close window
+        let key_ctrl = gtk4::EventControllerKey::new();
+        {
+            let win = window.clone();
+            key_ctrl.connect_key_pressed(move |_, key, _, mods| {
+                if mods.contains(gtk4::gdk::ModifierType::CONTROL_MASK)
+                    && (key == gtk4::gdk::Key::q || key == gtk4::gdk::Key::w)
+                {
+                    win.close();
+                    return gtk4::glib::Propagation::Stop;
+                }
+                gtk4::glib::Propagation::Proceed
+            });
+        }
+        window.add_controller(key_ctrl);
 
         Self { window }
     }
@@ -159,6 +177,19 @@ fn build_ui(
         .tooltip_text("Import floor plan image")
         .build();
 
+    let zoom_in_btn = Button::builder()
+        .icon_name("zoom-in-symbolic")
+        .tooltip_text("Zoom in")
+        .build();
+    let zoom_out_btn = Button::builder()
+        .icon_name("zoom-out-symbolic")
+        .tooltip_text("Zoom out")
+        .build();
+    let zoom_reset_btn = Button::builder()
+        .icon_name("zoom-original-symbolic")
+        .tooltip_text("Reset zoom")
+        .build();
+
     draw_bar.append(&mode_measure);
     draw_bar.append(&mode_draw);
     draw_bar.append(&mode_calib);
@@ -171,6 +202,10 @@ fn build_ui(
     draw_bar.append(&grid_spacing_dd);
     draw_bar.append(&Separator::new(Orientation::Vertical));
     draw_bar.append(&import_btn);
+    draw_bar.append(&Separator::new(Orientation::Vertical));
+    draw_bar.append(&zoom_in_btn);
+    draw_bar.append(&zoom_out_btn);
+    draw_bar.append(&zoom_reset_btn);
 
     main_box.append(&draw_bar);
 
@@ -181,6 +216,8 @@ fn build_ui(
     let floor_plan = FloorPlanView::new();
     floor_plan.set_show_grid(settings.borrow().show_grid);
     floor_plan.set_grid_spacing(settings.borrow().grid_spacing_m);
+    floor_plan.set_measurement_grid_spacing(settings.borrow().measurement_grid_spacing_m);
+    floor_plan.set_snap_to_grid(settings.borrow().snap_to_grid);
     body.append(&floor_plan.widget);
 
     let sidebar = GtkBox::new(Orientation::Vertical, 6);
@@ -292,29 +329,41 @@ fn build_ui(
             };
 
             let panel2 = panel.clone();
-            panel2.set_measuring(true, "Scanning WiFi…");
+            let status_msg = match (iperf_enabled && !iperf_server.is_empty(),
+                                    smb_enabled   && !smb_server.is_empty()) {
+                (true,  true)  => "Scanning + iperf3 + Samba…",
+                (true,  false) => "Scanning + iperf3…",
+                (false, true)  => "Scanning + Samba…",
+                (false, false) => "Scanning WiFi…",
+            };
+            panel2.set_measuring(true, status_msg);
 
             let (tx, recv) = async_channel::bounded::<MeasureResult>(1);
             std::thread::spawn(move || {
                 let wifi = WifiScanner::scan().ok().flatten();
 
-                let iperf_mbps = if iperf_enabled && !iperf_server.is_empty() {
-                    IperfClient::new(&iperf_server, iperf_port, iperf_dur)
-                        .run_test().ok()
+                let (iperf_mbps, iperf_error) = if iperf_enabled && !iperf_server.is_empty() {
+                    match IperfClient::new(&iperf_server, iperf_port, iperf_dur).run_test() {
+                        Ok(mbps) => (Some(mbps), None),
+                        Err(e)   => (None, Some(e.to_string())),
+                    }
                 } else {
-                    None
+                    (None, None)
                 };
 
-                let smb_mbps = if smb_enabled && !smb_server.is_empty() {
+                let (smb_mbps, smb_error) = if smb_enabled && !smb_server.is_empty() {
                     let mut tester = SmbTester::new(&smb_server, &smb_share);
                     tester.username = if smb_user.is_empty() { None } else { Some(smb_user) };
                     tester.password = if smb_pass.is_empty() { None } else { Some(smb_pass) };
-                    tester.run_test().ok()
+                    match tester.run_test() {
+                        Ok(mbps) => (Some(mbps), None),
+                        Err(e)   => (None, Some(e.to_string())),
+                    }
                 } else {
-                    None
+                    (None, None)
                 };
 
-                tx.send_blocking(MeasureResult { rx, ry, wifi, iperf_mbps, smb_mbps }).ok();
+                tx.send_blocking(MeasureResult { rx, ry, wifi, iperf_mbps, iperf_error, smb_mbps, smb_error }).ok();
             });
 
             let state2 = state.clone();
@@ -328,6 +377,13 @@ fn build_ui(
 
                 let Some(info) = result.wifi else {
                     overlay2.add_toast(Toast::new("No active WiFi connection"));
+                    // Still surface speed-test errors even without WiFi
+                    if let Some(ref e) = result.iperf_error {
+                        overlay2.add_toast(Toast::new(&format!("iperf3 error: {e}")));
+                    }
+                    if let Some(ref e) = result.smb_error {
+                        overlay2.add_toast(Toast::new(&format!("Samba error: {e}")));
+                    }
                     return;
                 };
 
@@ -338,6 +394,14 @@ fn build_ui(
                 );
                 m.iperf_mbps = result.iperf_mbps;
                 m.smb_mbps = result.smb_mbps;
+
+                // Surface speed-test errors as toasts
+                if let Some(ref e) = result.iperf_error {
+                    overlay2.add_toast(Toast::new(&format!("iperf3 error: {e}")));
+                }
+                if let Some(ref e) = result.smb_error {
+                    overlay2.add_toast(Toast::new(&format!("Samba error: {e}")));
+                }
 
                 let (measurements, panel_measurements) = {
                     let mut s = state2.borrow_mut();
@@ -555,6 +619,20 @@ fn build_ui(
         });
     }
 
+    // Zoom buttons
+    {
+        let fp = floor_plan.clone();
+        zoom_in_btn.connect_clicked(move |_| { fp.zoom_in(); });
+    }
+    {
+        let fp = floor_plan.clone();
+        zoom_out_btn.connect_clicked(move |_| { fp.zoom_out(); });
+    }
+    {
+        let fp = floor_plan.clone();
+        zoom_reset_btn.connect_clicked(move |_| { fp.reset_zoom(); });
+    }
+
     // Settings button
     {
         let settings = settings.clone();
@@ -572,6 +650,8 @@ fn build_ui(
                 let s = settings2.borrow();
                 fp2.set_show_grid(s.show_grid);
                 fp2.set_grid_spacing(s.grid_spacing_m);
+                fp2.set_measurement_grid_spacing(s.measurement_grid_spacing_m);
+                fp2.set_snap_to_grid(s.snap_to_grid);
                 grid_toggle2.set_active(s.show_grid);
                 panel2.set_throughput_unit(s.throughput_unit);
                 gtk4::glib::Propagation::Proceed

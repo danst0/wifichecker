@@ -4,6 +4,8 @@ use libadwaita::{
     ActionRow, EntryRow, PasswordEntryRow, PreferencesGroup,
     PreferencesPage, PreferencesWindow, SpinRow, SwitchRow,
 };
+
+const APP_VERSION: &str = env!("APP_VERSION");
 use std::cell::RefCell;
 use std::rc::Rc;
 
@@ -93,13 +95,13 @@ impl SettingsDialog {
         grid_group.set_description(Some("Background measurement grid"));
 
         let grid_switch = SwitchRow::new();
-        grid_switch.set_title("Show grid");
+        grid_switch.set_title("Show visual grid");
         grid_switch.set_active(settings.borrow().show_grid);
 
-        // Grid spacing selector
+        // Visual grid spacing selector
         let spacing_row = ActionRow::new();
-        spacing_row.set_title("Grid spacing");
-        spacing_row.set_subtitle("Meters per grid cell");
+        spacing_row.set_title("Visual grid spacing");
+        spacing_row.set_subtitle("Background grid line spacing");
 
         let spacing_model = gtk4::StringList::new(&["0.5 m", "1 m", "2 m", "5 m"]);
         let spacing_values = [0.5f64, 1.0, 2.0, 5.0];
@@ -113,8 +115,32 @@ impl SettingsDialog {
         spacing_drop.set_valign(gtk4::Align::Center);
         spacing_row.add_suffix(&spacing_drop);
 
+        // Measurement grid spacing selector
+        let meas_spacing_row = ActionRow::new();
+        meas_spacing_row.set_title("Measurement grid spacing");
+        meas_spacing_row.set_subtitle("Cell size for snapping and coloring");
+
+        let meas_spacing_model = gtk4::StringList::new(&["0.5 m", "1 m", "2 m", "5 m"]);
+        let meas_spacing_values = [0.5f64, 1.0, 2.0, 5.0];
+        let current_meas_spacing = settings.borrow().measurement_grid_spacing_m;
+        let meas_selected_idx = meas_spacing_values
+            .iter()
+            .position(|&v| (v - current_meas_spacing).abs() < 0.01)
+            .unwrap_or(1) as u32;
+        let meas_spacing_drop = gtk4::DropDown::new(Some(meas_spacing_model), gtk4::Expression::NONE);
+        meas_spacing_drop.set_selected(meas_selected_idx);
+        meas_spacing_drop.set_valign(gtk4::Align::Center);
+        meas_spacing_row.add_suffix(&meas_spacing_drop);
+
+        let snap_switch = SwitchRow::new();
+        snap_switch.set_title("Snap to measurement grid");
+        snap_switch.set_subtitle("Place measurements at cell centers");
+        snap_switch.set_active(settings.borrow().snap_to_grid);
+
         grid_group.add(&grid_switch);
         grid_group.add(&spacing_row);
+        grid_group.add(&meas_spacing_row);
+        grid_group.add(&snap_switch);
 
         // ── Display group ─────────────────────────────────────────────────
         let display_group = PreferencesGroup::new();
@@ -133,6 +159,83 @@ impl SettingsDialog {
         page.add(&display_group);
         win.add(&page);
 
+        // ── About page ────────────────────────────────────────────────────
+        let about_page = PreferencesPage::new();
+        about_page.set_title("About");
+        about_page.set_icon_name(Some("help-about-symbolic"));
+
+        // App info group
+        let info_group = PreferencesGroup::new();
+        info_group.set_title("WiFi Checker");
+        info_group.set_description(Some("WiFi signal strength analyzer and floor plan mapper"));
+
+        let version_row = ActionRow::new();
+        version_row.set_title("Version");
+        version_row.set_subtitle(APP_VERSION);
+        let version_label = gtk4::Label::new(Some(APP_VERSION));
+        version_label.add_css_class("dim-label");
+        version_label.set_valign(gtk4::Align::Center);
+
+        let author_row = ActionRow::new();
+        author_row.set_title("Author");
+        author_row.set_subtitle("Dr. Daniel Dumke");
+
+        let license_row = ActionRow::new();
+        license_row.set_title("License");
+        license_row.set_subtitle("MIT");
+
+        info_group.add(&version_row);
+        info_group.add(&author_row);
+        info_group.add(&license_row);
+
+        // Links group
+        let links_group = PreferencesGroup::new();
+        links_group.set_title("Links");
+
+        let source_row = ActionRow::new();
+        source_row.set_title("Source Code");
+        source_row.set_subtitle("github.com/danst0/wifichecker");
+        source_row.set_activatable(true);
+        source_row.add_suffix(&gtk4::Image::from_icon_name("go-next-symbolic"));
+        source_row.connect_activated(|_| {
+            gtk4::UriLauncher::new("https://github.com/danst0/wifichecker")
+                .launch(gtk4::Window::NONE, gtk4::gio::Cancellable::NONE, |_| {});
+        });
+
+        let issues_row = ActionRow::new();
+        issues_row.set_title("Report an Issue");
+        issues_row.set_subtitle("github.com/danst0/wifichecker/issues");
+        issues_row.set_activatable(true);
+        issues_row.add_suffix(&gtk4::Image::from_icon_name("go-next-symbolic"));
+        issues_row.connect_activated(|_| {
+            gtk4::UriLauncher::new("https://github.com/danst0/wifichecker/issues")
+                .launch(gtk4::Window::NONE, gtk4::gio::Cancellable::NONE, |_| {});
+        });
+
+        links_group.add(&source_row);
+        links_group.add(&issues_row);
+
+        // System tools group
+        let tools_group = PreferencesGroup::new();
+        tools_group.set_title("System Dependencies");
+        tools_group.set_description(Some("External tools used at runtime"));
+
+        for (tool, purpose) in [
+            ("nmcli", "WiFi scanning via NetworkManager"),
+            ("iperf3 / iperf2", "Network throughput testing"),
+            ("smbclient", "Samba share speed testing"),
+        ] {
+            let row = ActionRow::new();
+            row.set_title(tool);
+            row.set_subtitle(purpose);
+            tools_group.add(&row);
+        }
+
+        about_page.add(&info_group);
+        about_page.add(&links_group);
+        about_page.add(&tools_group);
+        win.add(&about_page);
+
         // ── Save on close ─────────────────────────────────────────────────
         {
             let settings = settings.clone();
@@ -146,10 +249,12 @@ impl SettingsDialog {
             let smb_user = smb_user.clone();
             let smb_pass = smb_pass.clone();
             let grid_switch = grid_switch.clone();
+            let snap_switch = snap_switch.clone();
             let unit_switch = unit_switch.clone();
 
             win.connect_close_request(move |_| {
                 let spacing_m = spacing_values[spacing_drop.selected() as usize];
+                let meas_spacing_m = meas_spacing_values[meas_spacing_drop.selected() as usize];
                 let mut s = settings.borrow_mut();
                 s.iperf_enabled = iperf_switch.is_active();
                 s.iperf_server = iperf_server.text().to_string();
@@ -162,6 +267,8 @@ impl SettingsDialog {
                 s.smb_password = smb_pass.text().to_string();
                 s.show_grid = grid_switch.is_active();
                 s.grid_spacing_m = spacing_m;
+                s.measurement_grid_spacing_m = meas_spacing_m;
+                s.snap_to_grid = snap_switch.is_active();
                 s.throughput_unit = if unit_switch.is_active() {
                     ThroughputUnit::MByte
                 } else {

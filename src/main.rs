@@ -2,13 +2,14 @@ mod heatmap;
 mod models;
 mod persistence;
 mod services;
+mod utils;
 mod widgets;
 mod window;
 
 use libadwaita::prelude::*;
 use libadwaita::Application;
 
-const APP_ID: &str = "io.github.wifichecker";
+const APP_ID: &str = "io.github.danst0.wifichecker";
 
 fn main() {
     env_logger::init();

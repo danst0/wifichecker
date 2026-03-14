@@ -28,6 +28,7 @@ impl ThroughputUnit {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
 pub struct AppSettings {
     // iperf3
     pub iperf_enabled: bool,
@@ -44,7 +45,9 @@ pub struct AppSettings {
 
     // Grid
     pub show_grid: bool,
-    pub grid_spacing_m: f64,
+    pub grid_spacing_m: f64,        // visual grid line spacing
+    pub measurement_grid_spacing_m: f64, // cell size for snapping & cell coloring
+    pub snap_to_grid: bool,
 
     // Display
     pub throughput_unit: ThroughputUnit,
@@ -66,6 +69,8 @@ impl Default for AppSettings {
 
             show_grid: true,
             grid_spacing_m: 1.0,
+            measurement_grid_spacing_m: 1.0,
+            snap_to_grid: false,
 
             throughput_unit: ThroughputUnit::Mbit,
         }

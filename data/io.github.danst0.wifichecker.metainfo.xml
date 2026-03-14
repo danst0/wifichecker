@@ -1,0 +1,42 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component type="desktop-application">
+  <id>io.github.danst0.wifichecker</id>
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>MIT</project_license>
+
+  <name>WiFi Checker</name>
+  <summary>WiFi signal strength analyzer and floor plan mapper</summary>
+
+  <description>
+    <p>
+      WiFi Checker lets you map WiFi signal strength across floors of a building.
+      Draw floor plans, take measurements at different locations, and visualize
+      signal quality with interactive heatmaps. Supports throughput testing via
+      iperf3 and SMB share testing.
+    </p>
+  </description>
+
+  <launchable type="desktop-id">io.github.danst0.wifichecker.desktop</launchable>
+
+  <url type="homepage">https://github.com/danst0/wifichecker</url>
+  <url type="bugtracker">https://github.com/danst0/wifichecker/issues</url>
+
+  <developer id="io.github.danst0">
+    <name>Dr. Daniel Dumke</name>
+  </developer>
+
+  <content_rating type="oars-1.1"/>
+
+  <releases>
+    <release version="0.0.8" date="2026-03-14">
+      <description>
+        <p>Added About page to settings, CI/CD pipeline, Flatpak packaging, README, and MIT license.</p>
+      </description>
+    </release>
+    <release version="0.0.7" date="2026-03-14">
+      <description>
+        <p>Added MByte/s vs Mbit/s throughput unit setting.</p>
+      </description>
+    </release>
+  </releases>
+</component>

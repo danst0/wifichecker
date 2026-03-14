@@ -1,4 +1,5 @@
 pub mod iperf_client;
+pub mod nm_dbus;
 pub mod smb_tester;
 pub mod wifi_scanner;
 
