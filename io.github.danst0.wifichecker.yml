@@ -33,7 +33,7 @@ modules:
     sources:
       - type: archive
         url: https://downloads.es.net/pub/iperf/iperf-3.18.tar.gz
-        sha256: # TODO: fill in sha256 of iperf-3.18.tar.gz
+        sha256: c0618175514331e766522500e20c94bfb293b4424eb27d7207fb427b88d20bab
 
   - name: wifichecker
     buildsystem: simple
@@ -48,6 +48,8 @@ modules:
       - install -Dm644 data/icons/scalable/apps/io.github.danst0.wifichecker.png
           /app/share/icons/hicolor/512x512/apps/io.github.danst0.wifichecker.png
     sources:
-      - type: dir
-        path: .
+      - type: git
+        url: https://github.com/danst0/wifichecker.git
+        tag: v0.0.8
+        commit: 64e6fe70ecc99fd0202d487ca8c67af991c01a23
       - cargo-sources.json
