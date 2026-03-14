@@ -11,6 +11,7 @@ use std::rc::Rc;
 
 use crate::models::{AppSettings, ThroughputUnit};
 use crate::persistence::SettingsStore;
+use crate::utils::flatpak::is_flatpak;
 
 pub struct SettingsDialog {
     pub window: PreferencesWindow,
@@ -154,7 +155,9 @@ impl SettingsDialog {
         display_group.add(&unit_switch);
 
         page.add(&iperf_group);
-        page.add(&smb_group);
+        if !is_flatpak() {
+            page.add(&smb_group);
+        }
         page.add(&grid_group);
         page.add(&display_group);
         win.add(&page);
@@ -220,11 +223,19 @@ impl SettingsDialog {
         tools_group.set_title("System Dependencies");
         tools_group.set_description(Some("External tools used at runtime"));
 
-        for (tool, purpose) in [
-            ("nmcli", "WiFi scanning via NetworkManager"),
-            ("iperf3 / iperf2", "Network throughput testing"),
-            ("smbclient", "Samba share speed testing"),
-        ] {
+        let system_tools: &[(&str, &str)] = if is_flatpak() {
+            &[
+                ("nmcli", "WiFi scanning via NetworkManager"),
+                ("iperf3 / iperf2", "Network throughput testing"),
+            ]
+        } else {
+            &[
+                ("nmcli", "WiFi scanning via NetworkManager"),
+                ("iperf3 / iperf2", "Network throughput testing"),
+                ("smbclient", "Samba share speed testing"),
+            ]
+        };
+        for (tool, purpose) in system_tools {
             let row = ActionRow::new();
             row.set_title(tool);
             row.set_subtitle(purpose);

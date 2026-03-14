@@ -19,6 +19,9 @@ pub struct Floor {
     /// Calibration point B (relative coords 0..1)
     #[serde(default)]
     pub calib_point_b: Option<(f64, f64)>,
+    /// Selected PDF page (0-based); only relevant when image_path points to a .pdf file
+    #[serde(default)]
+    pub pdf_page: Option<u32>,
 }
 
 impl Floor {
@@ -31,6 +34,7 @@ impl Floor {
             scale_px_per_m: None,
             calib_point_a: None,
             calib_point_b: None,
+            pdf_page: None,
         }
     }
 

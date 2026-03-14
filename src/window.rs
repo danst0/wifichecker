@@ -698,7 +698,7 @@ fn build_ui(
                         suppress2.set(false);
 
                         // Load the replacement floor into the UI
-                        let (measurements, image_path, drawing_path, scale, calib_a, calib_b) = {
+                        let (measurements, image_path, drawing_path, scale, calib_a, calib_b, pdf_page) = {
                             let s = state2.borrow();
                             let floor = &s.project.floors[new_idx];
                             (
@@ -708,12 +708,19 @@ fn build_ui(
                                 floor.scale_px_per_m,
                                 floor.calib_point_a,
                                 floor.calib_point_b,
+                                floor.pdf_page,
                             )
                         };
 
                         fp2.clear_canvas();
                         fp2.set_image("");
-                        if let Some(p) = image_path   { fp2.set_image(&p); }
+                        if let Some(ref p) = image_path {
+                            if p.to_lowercase().ends_with(".pdf") {
+                                fp2.set_pdf(p, pdf_page.unwrap_or(0));
+                            } else {
+                                fp2.set_image(p);
+                            }
+                        }
                         if let Some(p) = drawing_path { fp2.load_canvas(std::path::Path::new(&p)); }
                         if let (Some(sc), Some(a), Some(b)) = (scale, calib_a, calib_b) {
                             fp2.set_scale(sc, a, b);
@@ -744,7 +751,7 @@ fn build_ui(
             // Auto-save the floor being left
             auto_save(&fp, &state);
 
-            let (measurements, image_path, drawing_path, scale, calib_a, calib_b) = {
+            let (measurements, image_path, drawing_path, scale, calib_a, calib_b, pdf_page) = {
                 let mut s = state.borrow_mut();
                 if new_idx >= s.project.floors.len() { return; }
                 s.current_floor = new_idx;
@@ -756,10 +763,17 @@ fn build_ui(
                     floor.scale_px_per_m,
                     floor.calib_point_a,
                     floor.calib_point_b,
+                    floor.pdf_page,
                 )
             };
 
-            if let Some(p) = image_path { fp.set_image(&p); }
+            if let Some(ref p) = image_path {
+                if p.to_lowercase().ends_with(".pdf") {
+                    fp.set_pdf(p, pdf_page.unwrap_or(0));
+                } else {
+                    fp.set_image(p);
+                }
+            }
             if let Some(p) = drawing_path { fp.load_canvas(std::path::Path::new(&p)); }
             if let (Some(s), Some(a), Some(b)) = (scale, calib_a, calib_b) {
                 fp.set_scale(s, a, b);
@@ -782,7 +796,8 @@ fn build_ui(
             let filter = gtk4::FileFilter::new();
             filter.add_mime_type("image/png");
             filter.add_mime_type("image/jpeg");
-            filter.set_name(Some("Images (PNG, JPG)"));
+            filter.add_mime_type("application/pdf");
+            filter.set_name(Some("Images & PDF (PNG, JPG, PDF)"));
             let filters = gtk4::gio::ListStore::new::<gtk4::FileFilter>();
             filters.append(&filter);
             dialog.set_filters(Some(&filters));
@@ -790,20 +805,39 @@ fn build_ui(
             let state2 = state.clone();
             let fp2 = fp.clone();
             let overlay2 = overlay_ref.clone();
+            let window_ref2 = window_ref.clone();
             dialog.open(Some(&window_ref), gtk4::gio::Cancellable::NONE, move |result| {
                 if let Ok(file) = result {
                     if let Some(path) = file.path() {
                         let path_str = path.to_string_lossy().to_string();
-                        {
+                        if path_str.to_lowercase().ends_with(".pdf") {
+                            // Count pages; if > 1 show page-picker dialog
+                            match poppler::PopplerDocument::new_from_file(&path_str, None) {
+                                Err(e) => {
+                                    log::warn!("Cannot open PDF {path_str}: {e}");
+                                    overlay2.add_toast(Toast::new("Failed to open PDF"));
+                                }
+                                Ok(doc) => {
+                                    let n_pages = doc.get_n_pages();
+                                    if n_pages <= 1 {
+                                        import_pdf_page(&state2, &fp2, &overlay2, path_str, 0);
+                                    } else {
+                                        show_pdf_page_picker(&window_ref2, &state2, &fp2, &overlay2, path_str, n_pages);
+                                    }
+                                }
+                            }
+                        } else {
                             let mut s = state2.borrow_mut();
                             let idx = s.current_floor;
                             if let Some(floor) = s.project.floors.get_mut(idx) {
                                 floor.image_path = Some(path_str.clone());
+                                floor.pdf_page = None;
                             }
+                            drop(s);
+                            fp2.set_image(&path_str);
+                            auto_save(&fp2, &state2);
+                            overlay2.add_toast(Toast::new("Floor plan imported"));
                         }
-                        fp2.set_image(&path_str);
-                        auto_save(&fp2, &state2);
-                        overlay2.add_toast(Toast::new("Floor plan imported"));
                     }
                 }
             });
@@ -868,6 +902,7 @@ fn build_ui(
                 f.scale_px_per_m,
                 f.calib_point_a,
                 f.calib_point_b,
+                f.pdf_page,
             ));
             (names, first)
         }; // state borrow fully released here
@@ -878,8 +913,14 @@ fn build_ui(
         }
 
         // Load first floor into view
-        if let Some((measurements, image_path, drawing_path, scale, calib_a, calib_b)) = first_floor_data {
-            if let Some(p) = image_path { floor_plan.set_image(&p); }
+        if let Some((measurements, image_path, drawing_path, scale, calib_a, calib_b, pdf_page)) = first_floor_data {
+            if let Some(ref p) = image_path {
+                if p.to_lowercase().ends_with(".pdf") {
+                    floor_plan.set_pdf(p, pdf_page.unwrap_or(0));
+                } else {
+                    floor_plan.set_image(p);
+                }
+            }
             if let Some(p) = drawing_path { floor_plan.load_canvas(std::path::Path::new(&p)); }
             if let (Some(sc), Some(a), Some(b)) = (scale, calib_a, calib_b) {
                 floor_plan.set_scale(sc, a, b);
@@ -898,4 +939,95 @@ fn build_ui(
     panel.set_throughput_unit(settings.borrow().throughput_unit);
 
     overlay
+}
+
+fn import_pdf_page(
+    state: &Rc<RefCell<AppState>>,
+    fp: &FloorPlanView,
+    overlay: &libadwaita::ToastOverlay,
+    path_str: String,
+    page_idx: u32,
+) {
+    {
+        let mut s = state.borrow_mut();
+        let idx = s.current_floor;
+        if let Some(floor) = s.project.floors.get_mut(idx) {
+            floor.image_path = Some(path_str.clone());
+            floor.pdf_page = Some(page_idx);
+        }
+    }
+    fp.set_pdf(&path_str, page_idx);
+    auto_save(fp, state);
+    overlay.add_toast(libadwaita::Toast::new("Floor plan imported"));
+}
+
+fn show_pdf_page_picker(
+    parent: &libadwaita::ApplicationWindow,
+    state: &Rc<RefCell<AppState>>,
+    fp: &FloorPlanView,
+    overlay: &libadwaita::ToastOverlay,
+    path_str: String,
+    n_pages: usize,
+) {
+    use gtk4::prelude::*;
+
+    let dialog = gtk4::Window::builder()
+        .title("Select PDF Page")
+        .transient_for(parent)
+        .modal(true)
+        .default_width(320)
+        .resizable(false)
+        .build();
+
+    let vbox = gtk4::Box::new(gtk4::Orientation::Vertical, 12);
+    vbox.set_margin_top(20);
+    vbox.set_margin_bottom(20);
+    vbox.set_margin_start(20);
+    vbox.set_margin_end(20);
+
+    let label = gtk4::Label::new(Some(&format!(
+        "This PDF has {n_pages} pages.\nSelect which page to use as floor plan:"
+    )));
+    label.set_halign(gtk4::Align::Start);
+    vbox.append(&label);
+
+    let spin = gtk4::SpinButton::with_range(1.0, n_pages as f64, 1.0);
+    spin.set_value(1.0);
+    vbox.append(&spin);
+
+    let btn_row = gtk4::Box::new(gtk4::Orientation::Horizontal, 8);
+    btn_row.set_halign(gtk4::Align::End);
+
+    let cancel_btn = gtk4::Button::with_label("Cancel");
+    let ok_btn = gtk4::Button::with_label("Import");
+    ok_btn.add_css_class("suggested-action");
+
+    btn_row.append(&cancel_btn);
+    btn_row.append(&ok_btn);
+    vbox.append(&btn_row);
+
+    dialog.set_child(Some(&vbox));
+
+    // Cancel
+    {
+        let dialog_weak = dialog.downgrade();
+        cancel_btn.connect_clicked(move |_| {
+            if let Some(d) = dialog_weak.upgrade() { d.close(); }
+        });
+    }
+
+    // OK
+    {
+        let dialog_weak = dialog.downgrade();
+        let state = state.clone();
+        let fp = fp.clone();
+        let overlay = overlay.clone();
+        ok_btn.connect_clicked(move |_| {
+            let page_idx = (spin.value() as u32).saturating_sub(1);
+            import_pdf_page(&state, &fp, &overlay, path_str.clone(), page_idx);
+            if let Some(d) = dialog_weak.upgrade() { d.close(); }
+        });
+    }
+
+    dialog.present();
 }

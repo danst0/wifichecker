@@ -1,6 +1,6 @@
 [package]
 name = "wifichecker"
-version = "0.1.3"
+version = "0.1.4"
 edition = "2024"
 license = "MIT"
 authors = ["Dr. Daniel Dumke"]
@@ -20,6 +20,7 @@ log = "0.4"
 env_logger = "0.11"
 smb = "0.11"
 tokio = { version = "1", features = ["rt", "rt-multi-thread"] }
+poppler = { version = "0.6.0", features = ["render"] }
 
 [profile.release]
 opt-level = 3

@@ -2272,6 +2272,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "poppler"
+version = "0.6.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "275f6b71768d6726b1e8feb9d063c8784c4ac9c99dc8f6b8ea371eab8af6617c"
+dependencies = [
+ "cairo-rs",
+ "glib",
+ "gobject-sys",
+]
+
+[[package]]
 name = "portable-atomic"
 version = "1.13.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3723,7 +3734,7 @@ checksum = "72069c3113ab32ab29e5584db3c6ec55d416895e60715417b5b883a357c3e471"
 
 [[package]]
 name = "wifichecker"
-version = "0.1.2"
+version = "0.1.4"
 dependencies = [
  "anyhow",
  "async-channel",
@@ -3734,6 +3745,7 @@ dependencies = [
  "gtk4",
  "libadwaita",
  "log",
+ "poppler",
  "serde",
  "serde_json",
  "smb",

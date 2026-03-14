@@ -2,6 +2,7 @@ use gtk4::prelude::*;
 use gtk4::{DrawingArea, EventControllerKey, EventControllerMotion, EventControllerScroll, GestureDrag};
 use gdk_pixbuf::Pixbuf;
 use cairo::{Context, ImageSurface, Format};
+use poppler::PopplerDocument;
 use std::cell::RefCell;
 use std::rc::Rc;
 use std::time::Duration;
@@ -505,6 +506,15 @@ impl FloorPlanView {
         }
     }
 
+    pub fn set_pdf(&self, path: &str, page_idx: u32) {
+        if let Some(surface) = pdf_page_to_surface(path, page_idx) {
+            self.state.borrow_mut().image = Some(surface);
+            self.widget.queue_draw();
+        } else {
+            log::warn!("Failed to render PDF page {} from {path}", page_idx);
+        }
+    }
+
     pub fn set_measurements(&self, measurements: Vec<Measurement>) {
         self.state.borrow_mut().measurements = measurements;
         self.widget.queue_draw();
@@ -1004,6 +1014,25 @@ fn pixbuf_to_surface(pixbuf: &Pixbuf) -> Option<ImageSurface> {
                 }
             }
         }
+    }
+    Some(surface)
+}
+
+fn pdf_page_to_surface(path: &str, page_idx: u32) -> Option<ImageSurface> {
+    let doc = PopplerDocument::new_from_file(path, None)
+        .map_err(|e| log::warn!("Cannot open PDF {path}: {e}"))
+        .ok()?;
+    let page = doc.get_page(page_idx as usize)?;
+    let (w, h) = page.get_size();
+    let surface = ImageSurface::create(Format::ARgb32, w as i32, h as i32)
+        .map_err(|e| log::warn!("Cannot create surface for PDF page: {e}"))
+        .ok()?;
+    // White background (PDF pages default to transparent with poppler)
+    {
+        let ctx = Context::new(&surface).ok()?;
+        ctx.set_source_rgb(1.0, 1.0, 1.0);
+        ctx.paint().ok()?;
+        page.render(&ctx);
     }
     Some(surface)
 }
