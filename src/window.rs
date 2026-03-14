@@ -1,7 +1,7 @@
 use gtk4::prelude::*;
 use gtk4::{
-    Box as GtkBox, Button, DropDown, FileDialog, Label,
-    Orientation, Separator, SpinButton, StringList, ToggleButton,
+    Box as GtkBox, Button, DropDown, FileDialog,
+    Orientation, Separator, StringList, ToggleButton,
 };
 use gtk4::glib;
 use libadwaita::prelude::*;
@@ -112,6 +112,10 @@ fn build_ui(
     add_floor_btn.set_tooltip_text(Some("Add floor"));
     header.pack_start(&add_floor_btn);
 
+    let edit_floor_btn = Button::from_icon_name("document-edit-symbolic");
+    edit_floor_btn.set_tooltip_text(Some("Rename or delete current floor"));
+    header.pack_start(&edit_floor_btn);
+
     let heatmap_toggle = ToggleButton::new();
     heatmap_toggle.set_icon_name("view-grid-symbolic");
     heatmap_toggle.set_tooltip_text(Some("Toggle heatmap"));
@@ -152,11 +156,6 @@ fn build_ui(
         .tooltip_text("Clear drawing")
         .build();
 
-    let stroke_label = Label::new(Some("Width:"));
-    let stroke_spin = SpinButton::with_range(1.0, 20.0, 1.0);
-    stroke_spin.set_value(3.0);
-    stroke_spin.set_tooltip_text(Some("Stroke width"));
-
     let grid_toggle = ToggleButton::builder()
         .icon_name("view-grid-symbolic")
         .tooltip_text("Toggle grid")
@@ -190,13 +189,16 @@ fn build_ui(
         .tooltip_text("Reset zoom")
         .build();
 
+    let delete_all_btn = Button::builder()
+        .icon_name("user-trash-symbolic")
+        .tooltip_text("Delete all measurements")
+        .build();
+
     draw_bar.append(&mode_measure);
     draw_bar.append(&mode_draw);
     draw_bar.append(&mode_calib);
     draw_bar.append(&Separator::new(Orientation::Vertical));
     draw_bar.append(&clear_canvas_btn);
-    draw_bar.append(&stroke_label);
-    draw_bar.append(&stroke_spin);
     draw_bar.append(&Separator::new(Orientation::Vertical));
     draw_bar.append(&grid_toggle);
     draw_bar.append(&grid_spacing_dd);
@@ -206,6 +208,8 @@ fn build_ui(
     draw_bar.append(&zoom_in_btn);
     draw_bar.append(&zoom_out_btn);
     draw_bar.append(&zoom_reset_btn);
+    draw_bar.append(&Separator::new(Orientation::Vertical));
+    draw_bar.append(&delete_all_btn);
 
     main_box.append(&draw_bar);
 
@@ -256,12 +260,6 @@ fn build_ui(
         mode_calib.connect_toggled(move |btn| {
             if btn.is_active() { fp.set_draw_mode(DrawMode::Calibrate); }
         });
-    }
-
-    // Stroke width
-    {
-        let fp = floor_plan.clone();
-        stroke_spin.connect_value_changed(move |spin| fp.set_stroke_width(spin.value()));
     }
 
     // Clear canvas
@@ -487,6 +485,15 @@ fn build_ui(
         });
     }
 
+    // Persist drawing strokes when the user finishes a draw gesture
+    {
+        let fp = floor_plan.clone();
+        let state = state.clone();
+        floor_plan.set_on_draw_complete(move || {
+            auto_save(&fp, &state);
+        });
+    }
+
     // Delete measurement
     {
         let state = state.clone();
@@ -543,12 +550,136 @@ fn build_ui(
         });
     }
 
+    // Shared flag: suppress floor_dropdown's selected_notify during programmatic changes
+    let suppress_floor_change = Rc::new(std::cell::Cell::new(false));
+
+    // Edit floor (rename / delete)
+    {
+        let state = state.clone();
+        let floor_model = floor_model.clone();
+        let floor_dropdown = floor_dropdown.clone();
+        let fp = floor_plan.clone();
+        let panel = panel.clone();
+        let overlay_ref = overlay.clone();
+        let window_ref = window.clone();
+        let suppress = suppress_floor_change.clone();
+        edit_floor_btn.connect_clicked(move |_| {
+            let (current_name, n_floors, current_idx) = {
+                let s = state.borrow();
+                (
+                    s.project.floors[s.current_floor].name.clone(),
+                    s.project.floors.len(),
+                    s.current_floor,
+                )
+            };
+
+            let dialog = MessageDialog::builder()
+                .heading("Edit Floor")
+                .body(if n_floors > 1 { "Rename this floor or delete it." }
+                      else            { "Rename this floor." })
+                .default_response("rename")
+                .close_response("cancel")
+                .transient_for(&window_ref)
+                .modal(true)
+                .build();
+            dialog.add_response("cancel", "Cancel");
+            if n_floors > 1 {
+                dialog.add_response("delete", "Delete Floor");
+                dialog.set_response_appearance("delete", libadwaita::ResponseAppearance::Destructive);
+            }
+            dialog.add_response("rename", "Rename");
+            dialog.set_response_appearance("rename", libadwaita::ResponseAppearance::Suggested);
+
+            let entry = gtk4::Entry::builder()
+                .text(&current_name)
+                .activates_default(true)
+                .build();
+            dialog.set_extra_child(Some(&entry));
+
+            let state2        = state.clone();
+            let floor_model2  = floor_model.clone();
+            let floor_dd2     = floor_dropdown.clone();
+            let fp2           = fp.clone();
+            let panel2        = panel.clone();
+            let overlay2      = overlay_ref.clone();
+            let entry2        = entry.clone();
+            let suppress2     = suppress.clone();
+
+            dialog.choose(gtk4::gio::Cancellable::NONE, move |response| {
+                match response.as_str() {
+                    "rename" => {
+                        let new_name = entry2.text().trim().to_string();
+                        if new_name.is_empty() { return; }
+                        state2.borrow_mut().project.floors[current_idx].name = new_name.clone();
+                        floor_model2.splice(current_idx as u32, 1, &[new_name.as_str()]);
+                        auto_save(&fp2, &state2);
+                        overlay2.add_toast(Toast::new(&format!("Renamed to \"{new_name}\"")));
+                    }
+                    "delete" => {
+                        // Which floor to show after deletion
+                        let new_idx = if current_idx + 1 < n_floors { current_idx } else { current_idx - 1 };
+
+                        // Remove drawing file from disk
+                        if let Some(path) = state2.borrow().project.floors[current_idx].drawing_path.clone() {
+                            let _ = std::fs::remove_file(&path);
+                        }
+
+                        // Update model state
+                        {
+                            let mut s = state2.borrow_mut();
+                            s.project.floors.remove(current_idx);
+                            s.current_floor = new_idx;
+                        }
+
+                        // Update the dropdown without triggering selected_notify side-effects
+                        suppress2.set(true);
+                        floor_model2.remove(current_idx as u32);
+                        floor_dd2.set_selected(new_idx as u32);
+                        suppress2.set(false);
+
+                        // Load the replacement floor into the UI
+                        let (measurements, image_path, drawing_path, scale, calib_a, calib_b) = {
+                            let s = state2.borrow();
+                            let floor = &s.project.floors[new_idx];
+                            (
+                                floor.measurements.clone(),
+                                floor.image_path.clone(),
+                                floor.drawing_path.clone(),
+                                floor.scale_px_per_m,
+                                floor.calib_point_a,
+                                floor.calib_point_b,
+                            )
+                        };
+
+                        fp2.clear_canvas();
+                        fp2.set_image("");
+                        if let Some(p) = image_path   { fp2.set_image(&p); }
+                        if let Some(p) = drawing_path { fp2.load_canvas(std::path::Path::new(&p)); }
+                        if let (Some(sc), Some(a), Some(b)) = (scale, calib_a, calib_b) {
+                            fp2.set_scale(sc, a, b);
+                        } else {
+                            fp2.set_scale_px_per_m(None);
+                        }
+                        fp2.set_measurements(measurements.clone());
+                        panel2.set_measurements(measurements);
+
+                        auto_save(&fp2, &state2);
+                        overlay2.add_toast(Toast::new("Floor deleted"));
+                    }
+                    _ => {}
+                }
+            });
+        });
+    }
+
     // Floor dropdown
     {
         let state = state.clone();
         let fp = floor_plan.clone();
         let panel = panel.clone();
+        let suppress = suppress_floor_change.clone();
         floor_dropdown.connect_selected_notify(move |dd| {
+            if suppress.get() { return; }
             let new_idx = dd.selected() as usize;
             // Auto-save the floor being left
             auto_save(&fp, &state);

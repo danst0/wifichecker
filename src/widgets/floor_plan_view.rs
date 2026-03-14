@@ -35,7 +35,6 @@ struct FloorPlanState {
     canvas: Option<ImageSurface>,
     last_draw_pos: Option<(f64, f64)>,
     stroke_color: (f64, f64, f64),
-    stroke_width: f64,
     /// Snapped grid corner where the current drag started (used in snap mode)
     draw_start_pos: Option<(f64, f64)>,
     /// In-progress segment to preview before committing to canvas (snap mode)
@@ -56,6 +55,8 @@ struct FloorPlanState {
     zoom: f64,
     pan_x: f64,
     pan_y: f64,
+    /// Stored pan at the start of a middle-button pan drag.
+    pan_origin: Option<(f64, f64)>,
     /// Last known mouse position in widget space (used for scroll-wheel zoom centre).
     last_mouse_pos: Option<(f64, f64)>,
 
@@ -68,6 +69,7 @@ struct FloorPlanState {
     // Callbacks
     on_measure_click: Option<Box<dyn Fn(f64, f64)>>,
     on_calibration_complete: Option<Box<dyn Fn(f64, f64, f64, f64)>>,
+    on_draw_complete: Option<Box<dyn Fn()>>,
 }
 
 impl FloorPlanView {
@@ -87,12 +89,12 @@ impl FloorPlanView {
             canvas: None,
             last_draw_pos: None,
             stroke_color: (0.0, 0.0, 0.0),
-            stroke_width: 3.0,
             draw_start_pos: None,
             preview_line: None,
             zoom: 1.0,
             pan_x: 0.0,
             pan_y: 0.0,
+            pan_origin: None,
             last_mouse_pos: None,
             calib_a: None,
             calib_b: None,
@@ -107,6 +109,7 @@ impl FloorPlanView {
             hover_generation: 0,
             on_measure_click: None,
             on_calibration_complete: None,
+            on_draw_complete: None,
         }));
 
         // Draw function
@@ -231,7 +234,7 @@ impl FloorPlanView {
                             if let Ok(ctx) = Context::new(canvas) {
                                 let (r, g, b_ch) = s.stroke_color;
                                 ctx.set_source_rgb(r, g, b_ch);
-                                ctx.set_line_width(s.stroke_width);
+                                ctx.set_line_width(3.0);
                                 ctx.set_line_cap(cairo::LineCap::Round);
                                 ctx.move_to(a.0, a.1);
                                 ctx.line_to(b.0, b.1);
@@ -240,7 +243,12 @@ impl FloorPlanView {
                         }
                     }
                     s.draw_start_pos = None;
+                    let should_notify = s.on_draw_complete.is_some();
                     drop(s);
+                    if should_notify {
+                        let s2 = state.borrow();
+                        if let Some(ref cb) = s2.on_draw_complete { cb(); }
+                    }
                     if let Some(area) = area_weak.upgrade() { area.queue_draw(); }
                 } else {
                     s.last_draw_pos = None;
@@ -344,6 +352,38 @@ impl FloorPlanView {
         }
         area.add_controller(scroll);
 
+        // Middle-button drag to pan the view
+        let pan_drag = GestureDrag::new();
+        pan_drag.set_button(2); // middle mouse button
+        {
+            let state = state.clone();
+            pan_drag.connect_drag_begin(move |_, _x, _y| {
+                let mut s = state.borrow_mut();
+                s.pan_origin = Some((s.pan_x, s.pan_y));
+            });
+        }
+        {
+            let state = state.clone();
+            let area_weak = area.downgrade();
+            pan_drag.connect_drag_update(move |_, dx, dy| {
+                let Some(area) = area_weak.upgrade() else { return };
+                let mut s = state.borrow_mut();
+                if let Some((ox, oy)) = s.pan_origin {
+                    s.pan_x = ox + dx;
+                    s.pan_y = oy + dy;
+                    drop(s);
+                    area.queue_draw();
+                }
+            });
+        }
+        {
+            let state = state.clone();
+            pan_drag.connect_drag_end(move |_, _, _| {
+                state.borrow_mut().pan_origin = None;
+            });
+        }
+        area.add_controller(pan_drag);
+
         Self { widget: area, state }
     }
 
@@ -382,10 +422,6 @@ impl FloorPlanView {
 
     pub fn set_stroke_color(&self, r: f64, g: f64, b: f64) {
         self.state.borrow_mut().stroke_color = (r, g, b);
-    }
-
-    pub fn set_stroke_width(&self, w: f64) {
-        self.state.borrow_mut().stroke_width = w;
     }
 
     pub fn clear_canvas(&self) {
@@ -473,6 +509,10 @@ impl FloorPlanView {
 
     pub fn set_on_calibration_complete<F: Fn(f64, f64, f64, f64) + 'static>(&self, cb: F) {
         self.state.borrow_mut().on_calibration_complete = Some(Box::new(cb));
+    }
+
+    pub fn set_on_draw_complete<F: Fn() + 'static>(&self, cb: F) {
+        self.state.borrow_mut().on_draw_complete = Some(Box::new(cb));
     }
 
     // ── Zoom ───────────────────────────────────────────────────────────────
@@ -577,7 +617,7 @@ fn draw_all(state: &FloorPlanState, ctx: &Context, w: i32, h: i32) {
     if let Some(((ax, ay), (bx, by))) = state.preview_line {
         let (r, g, b) = state.stroke_color;
         ctx.set_source_rgba(r, g, b, 0.6);
-        ctx.set_line_width(state.stroke_width);
+        ctx.set_line_width(3.0);
         ctx.set_line_cap(cairo::LineCap::Round);
         ctx.set_dash(&[6.0, 4.0], 0.0);
         ctx.move_to(ax, ay);
