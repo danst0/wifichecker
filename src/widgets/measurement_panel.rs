@@ -15,6 +15,7 @@ pub struct MeasurementPanel {
     list: ListBox,
     measurements: Rc<RefCell<Vec<Measurement>>>,
     on_delete: Rc<RefCell<Option<Box<dyn Fn(String)>>>>,
+    on_delete_all: Rc<RefCell<Option<Box<dyn Fn()>>>>,
     unit: Rc<RefCell<ThroughputUnit>>,
 }
 
@@ -55,6 +56,20 @@ impl MeasurementPanel {
         let list_group = libadwaita::PreferencesGroup::new();
         list_group.set_title("Measurements");
 
+        let on_delete_all: Rc<RefCell<Option<Box<dyn Fn()>>>> = Rc::new(RefCell::new(None));
+        let delete_all_btn = Button::from_icon_name("user-trash-symbolic");
+        delete_all_btn.add_css_class("flat");
+        delete_all_btn.set_tooltip_text(Some("Delete all measurements"));
+        {
+            let on_delete_all = on_delete_all.clone();
+            delete_all_btn.connect_clicked(move |_| {
+                if let Some(ref cb) = *on_delete_all.borrow() {
+                    cb();
+                }
+            });
+        }
+        list_group.set_header_suffix(Some(&delete_all_btn));
+
         let list = ListBox::new();
         list.set_selection_mode(gtk4::SelectionMode::Single);
         list.add_css_class("boxed-list");
@@ -79,6 +94,7 @@ impl MeasurementPanel {
             list,
             measurements,
             on_delete,
+            on_delete_all,
             unit: Rc::new(RefCell::new(ThroughputUnit::Mbit)),
         }
     }
@@ -132,6 +148,10 @@ impl MeasurementPanel {
 
     pub fn set_on_delete<F: Fn(String) + 'static>(&self, cb: F) {
         *self.on_delete.borrow_mut() = Some(Box::new(cb));
+    }
+
+    pub fn set_on_delete_all<F: Fn() + 'static>(&self, cb: F) {
+        *self.on_delete_all.borrow_mut() = Some(Box::new(cb));
     }
 
     pub fn set_throughput_unit(&self, unit: ThroughputUnit) {

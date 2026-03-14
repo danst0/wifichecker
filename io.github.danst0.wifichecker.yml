@@ -1,6 +1,6 @@
 app-id: io.github.danst0.wifichecker
 runtime: org.gnome.Platform
-runtime-version: '47'
+runtime-version: '48'
 sdk: org.gnome.Sdk
 sdk-extensions:
   - org.freedesktop.Sdk.Extension.rust-stable
@@ -16,8 +16,6 @@ finish-args:
   - --share=network
   # D-Bus access to NetworkManager for wifi scanning
   - --system-talk-name=org.freedesktop.NetworkManager
-  # Config storage (~/.config/wifichecker/)
-  - --filesystem=xdg-config/wifichecker
 
 build-options:
   append-path: /usr/lib/sdk/rust-stable/bin

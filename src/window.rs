@@ -189,11 +189,6 @@ fn build_ui(
         .tooltip_text("Reset zoom")
         .build();
 
-    let delete_all_btn = Button::builder()
-        .icon_name("user-trash-symbolic")
-        .tooltip_text("Delete all measurements")
-        .build();
-
     draw_bar.append(&mode_measure);
     draw_bar.append(&mode_draw);
     draw_bar.append(&mode_calib);
@@ -208,8 +203,6 @@ fn build_ui(
     draw_bar.append(&zoom_in_btn);
     draw_bar.append(&zoom_out_btn);
     draw_bar.append(&zoom_reset_btn);
-    draw_bar.append(&Separator::new(Orientation::Vertical));
-    draw_bar.append(&delete_all_btn);
 
     main_box.append(&draw_bar);
 
@@ -517,14 +510,15 @@ fn build_ui(
         });
     }
 
-    // Delete all measurements
+    // Delete all measurements (triggered from panel's trash button)
     {
         let state = state.clone();
         let fp = floor_plan.clone();
         let panel = panel.clone();
         let overlay_ref = overlay.clone();
         let window_ref = window.clone();
-        delete_all_btn.connect_clicked(move |_| {
+        let panel_ref = panel.clone();
+        panel_ref.set_on_delete_all(move || {
             let n_floors = state.borrow().project.floors.len();
             let dialog = MessageDialog::builder()
                 .heading("Delete All Measurements")

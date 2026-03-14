@@ -1,5 +1,5 @@
 use gtk4::prelude::*;
-use gtk4::{DrawingArea, EventControllerMotion, EventControllerScroll, GestureDrag};
+use gtk4::{DrawingArea, EventControllerKey, EventControllerMotion, EventControllerScroll, GestureDrag};
 use gdk_pixbuf::Pixbuf;
 use cairo::{Context, ImageSurface, Format};
 use std::cell::RefCell;
@@ -59,6 +59,8 @@ struct FloorPlanState {
     pan_origin: Option<(f64, f64)>,
     /// Last known mouse position in widget space (used for scroll-wheel zoom centre).
     last_mouse_pos: Option<(f64, f64)>,
+    space_pressed: bool,
+    is_panning_via_space: bool,
 
     // Hover / tooltip
     hover_pos: Option<(f64, f64)>,
@@ -75,6 +77,8 @@ struct FloorPlanState {
 impl FloorPlanView {
     pub fn new() -> Self {
         let area = DrawingArea::new();
+        area.set_focusable(true);
+        area.set_focus_on_click(true);
         area.set_hexpand(true);
         area.set_vexpand(true);
         area.set_content_width(600);
@@ -88,7 +92,7 @@ impl FloorPlanView {
             mode: DrawMode::Measure,
             canvas: None,
             last_draw_pos: None,
-            stroke_color: (0.0, 0.0, 0.0),
+            stroke_color: (1.0, 1.0, 1.0),
             draw_start_pos: None,
             preview_line: None,
             zoom: 1.0,
@@ -96,6 +100,8 @@ impl FloorPlanView {
             pan_y: 0.0,
             pan_origin: None,
             last_mouse_pos: None,
+            space_pressed: false,
+            is_panning_via_space: false,
             calib_a: None,
             calib_b: None,
             scale_px_per_m: None,
@@ -132,6 +138,13 @@ impl FloorPlanView {
                 if w <= 0.0 || h <= 0.0 { return; }
 
                 let mut s = state.borrow_mut();
+                if s.space_pressed {
+                    s.is_panning_via_space = true;
+                    s.pan_origin = Some((s.pan_x, s.pan_y));
+                    drop(s);
+                    area.set_cursor_from_name(Some("grabbing"));
+                    return;
+                }
                 match s.mode {
                     DrawMode::Draw => {
                         ensure_canvas(&mut s, area.width(), area.height());
@@ -199,6 +212,15 @@ impl FloorPlanView {
             drag.connect_drag_update(move |drag, dx, dy| {
                 let Some(area) = area_weak.upgrade() else { return };
                 let mut s = state.borrow_mut();
+                if s.is_panning_via_space {
+                    if let Some((ox, oy)) = s.pan_origin {
+                        s.pan_x = ox + dx;
+                        s.pan_y = oy + dy;
+                        drop(s);
+                        area.queue_draw();
+                    }
+                    return;
+                }
                 if s.mode != DrawMode::Draw { return; }
 
                 let start = drag.start_point().unwrap_or((0.0, 0.0));
@@ -227,6 +249,16 @@ impl FloorPlanView {
             let area_weak = area.downgrade();
             drag.connect_drag_end(move |_, _, _| {
                 let mut s = state.borrow_mut();
+                if s.is_panning_via_space {
+                    s.pan_origin = None;
+                    s.is_panning_via_space = false;
+                    let cursor = if s.space_pressed { Some("grab") } else { None };
+                    drop(s);
+                    if let Some(area) = area_weak.upgrade() {
+                        area.set_cursor_from_name(cursor);
+                    }
+                    return;
+                }
                 if s.mode == DrawMode::Draw {
                     // Commit the previewed grid-snapped segment to the canvas
                     if let Some((a, b)) = s.preview_line.take() {
@@ -383,6 +415,75 @@ impl FloorPlanView {
             });
         }
         area.add_controller(pan_drag);
+
+        // Right-button drag to pan the view
+        let right_drag = GestureDrag::new();
+        right_drag.set_button(3); // right mouse button
+        {
+            let state = state.clone();
+            right_drag.connect_drag_begin(move |_, _x, _y| {
+                let mut s = state.borrow_mut();
+                s.pan_origin = Some((s.pan_x, s.pan_y));
+            });
+        }
+        {
+            let state = state.clone();
+            let area_weak = area.downgrade();
+            right_drag.connect_drag_update(move |_, dx, dy| {
+                let Some(area) = area_weak.upgrade() else { return };
+                let mut s = state.borrow_mut();
+                if let Some((ox, oy)) = s.pan_origin {
+                    s.pan_x = ox + dx;
+                    s.pan_y = oy + dy;
+                    drop(s);
+                    area.queue_draw();
+                }
+            });
+        }
+        {
+            let state = state.clone();
+            right_drag.connect_drag_end(move |_, _, _| {
+                state.borrow_mut().pan_origin = None;
+            });
+        }
+        area.add_controller(right_drag);
+
+        // Key controller for Space-to-pan
+        let key_ctrl = EventControllerKey::new();
+        {
+            let state = state.clone();
+            let area_weak = area.downgrade();
+            key_ctrl.connect_key_pressed(move |_, key, _, _| {
+                if key == gtk4::gdk::Key::space {
+                    let mut s = state.borrow_mut();
+                    s.space_pressed = true;
+                    drop(s);
+                    if let Some(area) = area_weak.upgrade() {
+                        area.set_cursor_from_name(Some("grab"));
+                    }
+                    return gtk4::glib::Propagation::Stop;
+                }
+                gtk4::glib::Propagation::Proceed
+            });
+        }
+        {
+            let state = state.clone();
+            let area_weak = area.downgrade();
+            key_ctrl.connect_key_released(move |_, key, _, _| {
+                if key == gtk4::gdk::Key::space {
+                    let mut s = state.borrow_mut();
+                    s.space_pressed = false;
+                    let still_dragging = s.is_panning_via_space;
+                    drop(s);
+                    if !still_dragging {
+                        if let Some(area) = area_weak.upgrade() {
+                            area.set_cursor_from_name(None);
+                        }
+                    }
+                }
+            });
+        }
+        area.add_controller(key_ctrl);
 
         Self { widget: area, state }
     }
