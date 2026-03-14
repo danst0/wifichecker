@@ -66,9 +66,6 @@ modules:
 
   - name: wifichecker
     buildsystem: simple
-    build-options:
-      env:
-        RUSTFLAGS: '-L /app/lib'
     build-commands:
       - cargo --offline fetch --manifest-path Cargo.toml --verbose
       - cargo --offline build --release --verbose

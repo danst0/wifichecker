@@ -22,6 +22,9 @@ smb = "0.11"
 tokio = { version = "1", features = ["rt", "rt-multi-thread"] }
 poppler = { version = "0.6.0", features = ["render"] }
 
+[build-dependencies]
+pkg-config = "0.3"
+
 [profile.release]
 opt-level = 3
 lto = true
