@@ -59,7 +59,7 @@ jobs:
 
       - name: Generate cargo sources
         run: |
-          pip3 install aiohttp toml
+          pip3 install aiohttp tomlkit
           curl -Lo /tmp/flatpak-cargo-generator.py \
             https://raw.githubusercontent.com/flatpak/flatpak-builder-tools/master/cargo/flatpak-cargo-generator.py
           python3 /tmp/flatpak-cargo-generator.py Cargo.lock -o cargo-sources.json
