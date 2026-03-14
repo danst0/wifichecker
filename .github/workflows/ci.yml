@@ -23,7 +23,8 @@ jobs:
           sudo apt-get install -y \
             libgtk-4-dev \
             libadwaita-1-dev \
-            libgdk-pixbuf2.0-dev
+            libgdk-pixbuf2.0-dev \
+            libpoppler-glib-dev
 
       - uses: dtolnay/rust-toolchain@stable
 
