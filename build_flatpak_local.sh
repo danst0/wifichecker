@@ -42,6 +42,7 @@ PYEOF
 
 # ── 2. Generate cargo-sources.json ──────────────────────────────────────────
 echo "▶  Generating cargo-sources.json …"
+pip3 install --quiet tomlkit
 GENERATOR="$(mktemp /tmp/flatpak-cargo-generator.XXXXXX.py)"
 curl -sLo "$GENERATOR" \
     https://raw.githubusercontent.com/flatpak/flatpak-builder-tools/master/cargo/flatpak-cargo-generator.py

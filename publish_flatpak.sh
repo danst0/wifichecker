@@ -31,6 +31,7 @@ echo "   Commit: $COMMIT_SHA"
 
 # ── 2. Regenerate cargo-sources.json ────────────────────────────────────────
 echo "▶  Regenerating cargo-sources.json …"
+pip3 install --quiet tomlkit
 GENERATOR="$(mktemp /tmp/flatpak-cargo-generator.XXXXXX.py)"
 curl -sLo "$GENERATOR" \
     https://raw.githubusercontent.com/flatpak/flatpak-builder-tools/master/cargo/flatpak-cargo-generator.py
