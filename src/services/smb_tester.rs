@@ -1,5 +1,6 @@
 use anyhow::{Context, Result};
-use std::process::Command;
+use smb::{Client, ClientConfig, CreateOptions, FileAttributes, FileCreateArgs, Resource, UncPath};
+use std::str::FromStr;
 
 pub struct SmbTester {
     pub server: String,
@@ -20,39 +21,65 @@ impl SmbTester {
 
     /// Test SMB upload speed with a 10 MB file (blocking). Returns Mbps.
     pub fn run_test(&self) -> Result<f64> {
-        let share_path = format!("//{}/{}", self.server, self.share);
-        let test_file = "wifichecker_speedtest.dat";
-        let tmp_path = format!("/tmp/{}", test_file);
+        tokio::runtime::Runtime::new()
+            .context("Failed to create async runtime")?
+            .block_on(self.run_test_async())
+    }
 
-        std::fs::write(&tmp_path, vec![0u8; 10 * 1024 * 1024])
-            .context("Failed to create temp test file")?;
+    async fn run_test_async(&self) -> Result<f64> {
+        let share_unc = format!(r"\\{}\{}", self.server, self.share);
+        let target = UncPath::from_str(&share_unc)
+            .map_err(|e| anyhow::anyhow!("Invalid UNC path '{share_unc}': {e}"))?;
 
-        let mut args = vec![
-            share_path,
-            "-c".to_string(),
-            format!("put {} {}", tmp_path, test_file),
-        ];
-        if let Some(ref user) = self.username {
-            args.extend(["-U".to_string(), user.clone()]);
-        }
-        if let Some(ref pass) = self.password {
-            args.extend(["--password".to_string(), pass.clone()]);
-        }
+        let client = Client::new(ClientConfig::default());
+        let username = self.username.as_deref().unwrap_or("guest");
+        let password = self.password.clone().unwrap_or_default();
+
+        client
+            .share_connect(&target, username, password)
+            .await
+            .context("Failed to connect to SMB share")?;
+
+        // Unique filename per run to avoid conflicts
+        let ts = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_millis();
+        let file_unc = format!(r"\\{}\{}\wifichecker_{ts}.dat", self.server, self.share);
+        let file_path = UncPath::from_str(&file_unc)
+            .map_err(|e| anyhow::anyhow!("Invalid file UNC path: {e}"))?;
+
+        let write_args = FileCreateArgs::make_create_new(
+            FileAttributes::new(),
+            CreateOptions::new(),
+        );
+
+        let resource = client
+            .create_file(&file_path, &write_args)
+            .await
+            .context("Failed to create test file on SMB share")?;
+
+        const TOTAL_BYTES: usize = 10 * 1024 * 1024; // 10 MB
+        const CHUNK_SIZE: usize = 1024 * 1024; // 1 MB chunks
+        let data = vec![0u8; CHUNK_SIZE];
 
         let start = std::time::Instant::now();
-        let status = Command::new("smbclient")
-            .args(&args)
-            .output()
-            .context("Failed to run smbclient (is it installed?)")?;
-        let elapsed = start.elapsed().as_secs_f64();
 
-        let _ = std::fs::remove_file(&tmp_path);
-
-        if !status.status.success() {
-            anyhow::bail!("smbclient failed: {}", String::from_utf8_lossy(&status.stderr));
+        if let Resource::File(file) = resource {
+            let mut offset = 0u64;
+            while offset < TOTAL_BYTES as u64 {
+                let written = file
+                    .write_block(&data, offset, None)
+                    .await
+                    .context("Failed to write to SMB share")?;
+                offset += written as u64;
+            }
+            file.close().await.ok();
         }
+
+        let elapsed = start.elapsed().as_secs_f64();
+        client.close().await.ok();
 
         Ok((10.0 * 8.0) / elapsed)
     }
 }
-
