@@ -863,9 +863,11 @@ fn draw_calibration(ctx: &Context, w: f64, h: f64, state: &FloorPlanState) {
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
-fn ensure_canvas(state: &mut FloorPlanState, w: i32, h: i32) {
+fn ensure_canvas(state: &mut FloorPlanState, _w: i32, _h: i32) {
     if state.canvas.is_none() {
-        if let Ok(surface) = ImageSurface::create(Format::ARgb32, w, h) {
+        // Use a large fixed canvas so drawing is never clipped by the widget size.
+        // At a typical calibrated scale (~52 px/m) this covers ~78 m in each direction.
+        if let Ok(surface) = ImageSurface::create(Format::ARgb32, 4096, 4096) {
             state.canvas = Some(surface);
         }
     }

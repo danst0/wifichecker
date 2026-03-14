@@ -517,6 +517,72 @@ fn build_ui(
         });
     }
 
+    // Delete all measurements
+    {
+        let state = state.clone();
+        let fp = floor_plan.clone();
+        let panel = panel.clone();
+        let overlay_ref = overlay.clone();
+        let window_ref = window.clone();
+        delete_all_btn.connect_clicked(move |_| {
+            let n_floors = state.borrow().project.floors.len();
+            let dialog = MessageDialog::builder()
+                .heading("Delete All Measurements")
+                .body(if n_floors > 1 {
+                    "Delete measurements on the current floor, or on all floors?"
+                } else {
+                    "Delete all measurements on this floor?"
+                })
+                .default_response("cancel")
+                .close_response("cancel")
+                .transient_for(&window_ref)
+                .modal(true)
+                .build();
+            dialog.add_response("cancel", "Cancel");
+            if n_floors > 1 {
+                dialog.add_response("all", "All Floors");
+                dialog.set_response_appearance("all", libadwaita::ResponseAppearance::Destructive);
+            }
+            dialog.add_response("current", "This Floor");
+            dialog.set_response_appearance("current", libadwaita::ResponseAppearance::Destructive);
+
+            let state2 = state.clone();
+            let fp2 = fp.clone();
+            let panel2 = panel.clone();
+            let overlay2 = overlay_ref.clone();
+            dialog.choose(gtk4::gio::Cancellable::NONE, move |response| {
+                match response.as_str() {
+                    "current" => {
+                        let idx = state2.borrow().current_floor;
+                        {
+                            let mut s = state2.borrow_mut();
+                            if let Some(floor) = s.project.floors.get_mut(idx) {
+                                floor.measurements.clear();
+                            }
+                        }
+                        fp2.set_measurements(vec![]);
+                        panel2.set_measurements(vec![]);
+                        auto_save(&fp2, &state2);
+                        overlay2.add_toast(Toast::new("Measurements deleted"));
+                    }
+                    "all" => {
+                        {
+                            let mut s = state2.borrow_mut();
+                            for floor in s.project.floors.iter_mut() {
+                                floor.measurements.clear();
+                            }
+                        }
+                        fp2.set_measurements(vec![]);
+                        panel2.set_measurements(vec![]);
+                        auto_save(&fp2, &state2);
+                        overlay2.add_toast(Toast::new("All measurements deleted"));
+                    }
+                    _ => {}
+                }
+            });
+        });
+    }
+
     // Add floor
     {
         let state = state.clone();
