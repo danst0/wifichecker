@@ -149,3 +149,60 @@ fn parse_iperf2_mbps(output: &str) -> Option<f64> {
     }
     None
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_iperf_client_new() {
+        let c = IperfClient::new("192.168.1.1", 5201, 10, 4);
+        assert_eq!(c.server, "192.168.1.1");
+        assert_eq!(c.port, 5201);
+        assert_eq!(c.duration_secs, 10);
+        assert_eq!(c.parallel_streams, 4);
+    }
+
+    #[test]
+    fn test_parse_iperf2_mbps_basic() {
+        let output = "[  3]  0.0- 5.0 sec  38.1 MBytes  64.0 Mbits/sec";
+        assert_eq!(parse_iperf2_mbps(output), Some(64.0));
+    }
+
+    #[test]
+    fn test_parse_iperf2_mbps_gbits() {
+        let output = "[  3]  0.0- 5.0 sec  1.2 GBytes  1.5 Gbits/sec";
+        assert_eq!(parse_iperf2_mbps(output), Some(1500.0));
+    }
+
+    #[test]
+    fn test_parse_iperf2_mbps_kbits() {
+        let output = "[  3]  0.0- 5.0 sec  500 KBytes  820.0 Kbits/sec";
+        let result = parse_iperf2_mbps(output).unwrap();
+        assert!((result - 0.82).abs() < 1e-9);
+    }
+
+    #[test]
+    fn test_parse_iperf2_empty_returns_none() {
+        assert_eq!(parse_iperf2_mbps(""), None);
+    }
+
+    #[test]
+    fn test_parse_iperf2_no_sec_line_returns_none() {
+        assert_eq!(parse_iperf2_mbps("Connected to server\nTransfer complete"), None);
+    }
+
+    #[test]
+    fn test_parse_iperf2_picks_last_line() {
+        let output = "\
+[  3]  0.0- 1.0 sec  10.0 MBytes  80.0 Mbits/sec\n\
+[  3]  0.0- 5.0 sec  38.1 MBytes  64.0 Mbits/sec";
+        assert_eq!(parse_iperf2_mbps(output), Some(64.0));
+    }
+
+    #[test]
+    fn test_parse_iperf2_integer_value() {
+        let output = "[  3]  0.0- 5.0 sec  50.0 MBytes  100 Mbits/sec";
+        assert_eq!(parse_iperf2_mbps(output), Some(100.0));
+    }
+}

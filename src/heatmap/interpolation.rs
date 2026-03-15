@@ -91,3 +91,115 @@ fn dbm_to_color(dbm: f64) -> (f64, f64, f64) {
         (1.0, s, 0.0)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn make_measurement_at(x: f64, y: f64, signal_dbm: i32) -> Measurement {
+        Measurement::new(x, y, "SSID".to_string(), "AA:BB:CC:DD:EE:FF".to_string(), 2412, 1, signal_dbm)
+    }
+
+    // --- dbm_to_color ---
+
+    #[test]
+    fn test_dbm_to_color_excellent() {
+        // -30 dBm → t = 1.0 → green: (0.0, 1.0, 0.0)
+        let (r, g, b) = dbm_to_color(-30.0);
+        assert!((r - 0.0).abs() < 1e-9);
+        assert!((g - 1.0).abs() < 1e-9);
+        assert!((b - 0.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn test_dbm_to_color_no_signal() {
+        // -90 dBm → t = 0.0 → dark red: (1.0, 0.0, 0.0)
+        let (r, g, b) = dbm_to_color(-90.0);
+        assert!((r - 1.0).abs() < 1e-9);
+        assert!((g - 0.0).abs() < 1e-9);
+        assert!((b - 0.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn test_dbm_to_color_fair() {
+        // -60 dBm → t = 0.5 → yellow: (1.0, 1.0, 0.0)
+        let (r, g, b) = dbm_to_color(-60.0);
+        assert!((r - 1.0).abs() < 1e-9);
+        assert!((g - 1.0).abs() < 1e-9);
+        assert!((b - 0.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn test_dbm_to_color_clamped_above() {
+        // Better than -30 dBm → same as -30
+        let (r1, g1, b1) = dbm_to_color(-30.0);
+        let (r2, g2, b2) = dbm_to_color(-10.0);
+        assert!((r1 - r2).abs() < 1e-9);
+        assert!((g1 - g2).abs() < 1e-9);
+        assert!((b1 - b2).abs() < 1e-9);
+    }
+
+    #[test]
+    fn test_dbm_to_color_clamped_below() {
+        // Worse than -90 dBm → same as -90
+        let (r1, g1, b1) = dbm_to_color(-90.0);
+        let (r2, g2, b2) = dbm_to_color(-120.0);
+        assert!((r1 - r2).abs() < 1e-9);
+        assert!((g1 - g2).abs() < 1e-9);
+        assert!((b1 - b2).abs() < 1e-9);
+    }
+
+    #[test]
+    fn test_dbm_to_color_blue_channel_is_always_zero() {
+        for dbm in [-90.0, -75.0, -60.0, -45.0, -30.0] {
+            let (_, _, b) = dbm_to_color(dbm);
+            assert!((b - 0.0).abs() < 1e-9, "blue should be 0 for {dbm} dBm");
+        }
+    }
+
+    // --- idw_interpolate ---
+
+    #[test]
+    fn test_idw_exact_hit_returns_measurement_value() {
+        let measurements = vec![make_measurement_at(0.5, 0.5, -60)];
+        let result = idw_interpolate(&measurements, 0.5, 0.5, 2.0);
+        assert!((result - (-60.0)).abs() < 1e-6);
+    }
+
+    #[test]
+    fn test_idw_equal_measurements_midpoint() {
+        // Two points with identical signal; midpoint should return the same value
+        let measurements = vec![
+            make_measurement_at(0.0, 0.5, -60),
+            make_measurement_at(1.0, 0.5, -60),
+        ];
+        let result = idw_interpolate(&measurements, 0.5, 0.5, 2.0);
+        assert!((result - (-60.0)).abs() < 1e-6);
+    }
+
+    #[test]
+    fn test_idw_closer_measurement_dominates() {
+        // Point near -50 measurement, far from -80
+        let measurements = vec![
+            make_measurement_at(0.1, 0.5, -50),
+            make_measurement_at(0.9, 0.5, -80),
+        ];
+        let result = idw_interpolate(&measurements, 0.1, 0.5, 2.0);
+        // At exact location of first measurement → returns -50
+        assert!((result - (-50.0)).abs() < 1e-6);
+    }
+
+    #[test]
+    fn test_idw_empty_returns_fallback() {
+        let result = idw_interpolate(&[], 0.5, 0.5, 2.0);
+        assert!((result - (-90.0)).abs() < 1e-6);
+    }
+
+    #[test]
+    fn test_idw_single_measurement_any_point() {
+        let measurements = vec![make_measurement_at(0.3, 0.7, -55)];
+        // Far from measurement — should still pull toward -55 (only one data point)
+        let result = idw_interpolate(&measurements, 0.9, 0.1, 2.0);
+        assert!((result - (-55.0)).abs() < 1e-6);
+    }
+}

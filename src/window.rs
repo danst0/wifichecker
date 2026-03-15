@@ -782,6 +782,7 @@ fn build_ui(
         let panel = panel.clone();
         let suppress = suppress_floor_change.clone();
         let legend = legend.clone();
+        let settings = settings.clone();
         floor_dropdown.connect_selected_notify(move |dd| {
             if suppress.get() { return; }
             let new_idx = dd.selected() as usize;
@@ -792,6 +793,8 @@ fn build_ui(
                 let mut s = state.borrow_mut();
                 if new_idx >= s.project.floors.len() { return; }
                 s.current_floor = new_idx;
+                settings.borrow_mut().last_floor_index = new_idx;
+                let _ = SettingsStore::save(&settings.borrow());
                 let floor = &s.project.floors[new_idx];
                 (
                     floor.measurements.clone(),
@@ -929,14 +932,16 @@ fn build_ui(
     // ── Initialize from loaded project ────────────────────────────────────────
     {
         // Collect all data needed, then release borrow before touching the model
-        let (floor_names, first_floor_data) = {
+        let (floor_names, start_floor_data, start_idx) = {
             let mut s = state.borrow_mut();
             if s.project.floors.is_empty() {
                 s.project.add_floor(Floor::new("Floor 1"));
             }
-            s.current_floor = 0;
+            let last_idx = settings.borrow().last_floor_index;
+            let start_idx = if last_idx < s.project.floors.len() { last_idx } else { 0 };
+            s.current_floor = start_idx;
             let names: Vec<String> = s.project.floors.iter().map(|f| f.name.clone()).collect();
-            let first = s.project.floors.first().map(|f| (
+            let first = s.project.floors.get(start_idx).map(|f| (
                 f.measurements.clone(),
                 f.image_path.clone(),
                 f.drawing_path.clone(),
@@ -946,16 +951,20 @@ fn build_ui(
                 f.pdf_page,
                 f.origin,
             ));
-            (names, first)
+            (names, first, start_idx)
         }; // state borrow fully released here
 
-        // Now safe to append — connect_selected_notify won't re-enter borrow
+        // Suppress all notifications during bulk initialization to prevent premature
+        // selected_notify firing (GTK auto-selects index 0 on first append).
+        suppress_floor_change.set(true);
         for name in &floor_names {
             floor_model.append(name);
         }
+        floor_dropdown.set_selected(start_idx as u32);
+        suppress_floor_change.set(false);
 
-        // Load first floor into view
-        if let Some((measurements, image_path, drawing_path, scale, calib_a, calib_b, pdf_page, origin)) = first_floor_data {
+        // Load restored floor into view
+        if let Some((measurements, image_path, drawing_path, scale, calib_a, calib_b, pdf_page, origin)) = start_floor_data {
             if let Some(ref p) = image_path {
                 if p.to_lowercase().ends_with(".pdf") {
                     floor_plan.set_pdf(p, pdf_page.unwrap_or(0));

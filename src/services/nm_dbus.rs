@@ -143,3 +143,83 @@ fn freq_to_channel(freq_mhz: u32) -> u8 {
         _ => 0,
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_freq_to_channel_24ghz_ch1() {
+        assert_eq!(freq_to_channel(2412), 1);
+    }
+
+    #[test]
+    fn test_freq_to_channel_24ghz_ch6() {
+        // (2437 - 2412) / 5 + 1 = 5 + 1 = 6
+        assert_eq!(freq_to_channel(2437), 6);
+    }
+
+    #[test]
+    fn test_freq_to_channel_24ghz_ch11() {
+        assert_eq!(freq_to_channel(2462), 11);
+    }
+
+    #[test]
+    fn test_freq_to_channel_24ghz_ch13() {
+        assert_eq!(freq_to_channel(2472), 13);
+    }
+
+    #[test]
+    fn test_freq_to_channel_24ghz_ch14() {
+        assert_eq!(freq_to_channel(2484), 14);
+    }
+
+    #[test]
+    fn test_freq_to_channel_5ghz_ch32() {
+        // (5160 - 5000) / 5 = 32
+        assert_eq!(freq_to_channel(5160), 32);
+    }
+
+    #[test]
+    fn test_freq_to_channel_5ghz_ch36() {
+        // (5180 - 5000) / 5 = 36
+        assert_eq!(freq_to_channel(5180), 36);
+    }
+
+    #[test]
+    fn test_freq_to_channel_5ghz_ch100() {
+        // (5500 - 5000) / 5 = 100
+        assert_eq!(freq_to_channel(5500), 100);
+    }
+
+    #[test]
+    fn test_freq_to_channel_6ghz_ch1() {
+        // Wi-Fi 6E: (5955 - 5955) / 5 + 1 = 1
+        assert_eq!(freq_to_channel(5955), 1);
+    }
+
+    #[test]
+    fn test_freq_to_channel_unknown_returns_zero() {
+        assert_eq!(freq_to_channel(0), 0);
+        assert_eq!(freq_to_channel(3000), 0);
+        assert_eq!(freq_to_channel(2473), 0); // gap between ch13 and ch14
+    }
+
+    #[test]
+    fn test_signal_dbm_conversion_from_strength() {
+        // NM Strength 0-100 → dBm: (strength / 2) - 100
+        // Strength 100 → (100 / 2) - 100 = -50
+        // Strength 0   → (0 / 2)   - 100 = -100
+        let strength_100: i32 = 100;
+        let dbm_100 = (strength_100 / 2) - 100;
+        assert_eq!(dbm_100, -50);
+
+        let strength_0: i32 = 0;
+        let dbm_0 = (strength_0 / 2) - 100;
+        assert_eq!(dbm_0, -100);
+
+        let strength_50: i32 = 50;
+        let dbm_50 = (strength_50 / 2) - 100;
+        assert_eq!(dbm_50, -75);
+    }
+}

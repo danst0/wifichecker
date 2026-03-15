@@ -51,5 +51,75 @@ impl Floor {
     }
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn make_measurement(id: &str) -> Measurement {
+        let mut m = Measurement::new(0.5, 0.5, "SSID".to_string(), "AA:BB:CC:DD:EE:FF".to_string(), 2412, 1, -60);
+        m.id = id.to_string();
+        m
+    }
+
+    #[test]
+    fn test_floor_new() {
+        let f = Floor::new("Ground Floor");
+        assert_eq!(f.name, "Ground Floor");
+        assert!(f.measurements.is_empty());
+        assert!(f.image_path.is_none());
+        assert!(f.drawing_path.is_none());
+        assert!(f.scale_px_per_m.is_none());
+        assert!(f.calib_point_a.is_none());
+        assert!(f.calib_point_b.is_none());
+        assert!(f.pdf_page.is_none());
+        assert!(f.origin.is_none());
+    }
+
+    #[test]
+    fn test_add_measurement() {
+        let mut f = Floor::new("Test");
+        assert_eq!(f.measurements.len(), 0);
+        f.add_measurement(make_measurement("id-1"));
+        assert_eq!(f.measurements.len(), 1);
+        f.add_measurement(make_measurement("id-2"));
+        assert_eq!(f.measurements.len(), 2);
+    }
+
+    #[test]
+    fn test_remove_measurement() {
+        let mut f = Floor::new("Test");
+        f.add_measurement(make_measurement("id-1"));
+        f.add_measurement(make_measurement("id-2"));
+        f.remove_measurement("id-1");
+        assert_eq!(f.measurements.len(), 1);
+        assert_eq!(f.measurements[0].id, "id-2");
+    }
+
+    #[test]
+    fn test_remove_nonexistent_measurement() {
+        let mut f = Floor::new("Test");
+        f.add_measurement(make_measurement("id-1"));
+        f.remove_measurement("nonexistent-id");
+        assert_eq!(f.measurements.len(), 1);
+    }
+
+    #[test]
+    fn test_remove_all_measurements() {
+        let mut f = Floor::new("Test");
+        f.add_measurement(make_measurement("id-1"));
+        f.add_measurement(make_measurement("id-2"));
+        f.remove_measurement("id-1");
+        f.remove_measurement("id-2");
+        assert!(f.measurements.is_empty());
+    }
+
+    #[test]
+    fn test_floor_new_with_string_owned() {
+        let name = String::from("Level 2");
+        let f = Floor::new(name);
+        assert_eq!(f.name, "Level 2");
+    }
+}
+
 
 
