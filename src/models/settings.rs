@@ -35,6 +35,7 @@ pub struct AppSettings {
     pub iperf_server: String,
     pub iperf_port: u16,
     pub iperf_duration_secs: u32,
+    pub iperf_parallel_streams: u8,
 
     // Samba
     pub smb_enabled: bool,
@@ -60,6 +61,7 @@ impl Default for AppSettings {
             iperf_server: String::new(),
             iperf_port: 5201,
             iperf_duration_secs: 5,
+            iperf_parallel_streams: 4,
 
             smb_enabled: false,
             smb_server: String::new(),

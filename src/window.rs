@@ -320,12 +320,13 @@ fn build_ui(
         let settings = settings.clone();
 
         floor_plan.set_on_measure_click(move |rx, ry| {
-            let (iperf_enabled, iperf_server, iperf_port, iperf_dur,
+            let (iperf_enabled, iperf_server, iperf_port, iperf_dur, iperf_streams,
                  smb_enabled, smb_server, smb_share, smb_user, smb_pass,
                  unit) = {
                 let s = settings.borrow();
                 (
                     s.iperf_enabled, s.iperf_server.clone(), s.iperf_port, s.iperf_duration_secs,
+                    s.iperf_parallel_streams,
                     s.smb_enabled, s.smb_server.clone(), s.smb_share.clone(),
                     s.smb_username.clone(), s.smb_password.clone(),
                     s.throughput_unit,
@@ -347,7 +348,7 @@ fn build_ui(
                 let wifi = WifiScanner::scan().ok().flatten();
 
                 let (iperf_mbps, iperf_error) = if iperf_enabled && !iperf_server.is_empty() {
-                    match IperfClient::new(&iperf_server, iperf_port, iperf_dur).run_test() {
+                    match IperfClient::new(&iperf_server, iperf_port, iperf_dur, iperf_streams).run_test() {
                         Ok(mbps) => (Some(mbps), None),
                         Err(e)   => (None, Some(e.to_string())),
                     }

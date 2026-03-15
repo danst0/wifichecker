@@ -9,11 +9,12 @@ pub struct IperfClient {
     pub server: String,
     pub port: u16,
     pub duration_secs: u32,
+    pub parallel_streams: u8,
 }
 
 impl IperfClient {
-    pub fn new(server: impl Into<String>, port: u16, duration_secs: u32) -> Self {
-        Self { server: server.into(), port, duration_secs }
+    pub fn new(server: impl Into<String>, port: u16, duration_secs: u32, parallel_streams: u8) -> Self {
+        Self { server: server.into(), port, duration_secs, parallel_streams }
     }
 
     /// Run iperf test (blocking). Tries iperf3 first, falls back to iperf2.
@@ -40,6 +41,7 @@ impl IperfClient {
                 "-p", &self.port.to_string(),
                 "-t", &self.duration_secs.to_string(),
                 "-J",
+                "-P", &self.parallel_streams.to_string(),
             ])
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
@@ -70,6 +72,7 @@ impl IperfClient {
                 "-c", &self.server,
                 "-p", &self.port.to_string(),
                 "-t", &self.duration_secs.to_string(),
+                "-P", &self.parallel_streams.to_string(),
             ])
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())

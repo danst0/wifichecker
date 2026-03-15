@@ -52,10 +52,15 @@ impl SettingsDialog {
         iperf_dur.set_title("Duration (seconds)");
         iperf_dur.set_value(s.iperf_duration_secs as f64);
 
+        let iperf_streams = SpinRow::with_range(1.0, 16.0, 1.0);
+        iperf_streams.set_title("Parallel streams");
+        iperf_streams.set_value(s.iperf_parallel_streams as f64);
+
         iperf_group.add(&iperf_switch);
         iperf_group.add(&iperf_server);
         iperf_group.add(&iperf_port);
         iperf_group.add(&iperf_dur);
+        iperf_group.add(&iperf_streams);
 
         // ── Samba group ───────────────────────────────────────────────────
         let smb_group = PreferencesGroup::new();
@@ -254,6 +259,7 @@ impl SettingsDialog {
             let iperf_server = iperf_server.clone();
             let iperf_port = iperf_port.clone();
             let iperf_dur = iperf_dur.clone();
+            let iperf_streams = iperf_streams.clone();
             let smb_switch = smb_switch.clone();
             let smb_server = smb_server.clone();
             let smb_share = smb_share.clone();
@@ -271,6 +277,7 @@ impl SettingsDialog {
                 s.iperf_server = iperf_server.text().to_string();
                 s.iperf_port = iperf_port.value() as u16;
                 s.iperf_duration_secs = iperf_dur.value() as u32;
+                s.iperf_parallel_streams = iperf_streams.value() as u8;
                 s.smb_enabled = smb_switch.is_active();
                 s.smb_server = smb_server.text().to_string();
                 s.smb_share = smb_share.text().to_string();
