@@ -80,5 +80,5 @@ modules:
       - type: git
         url: https://github.com/danst0/wifichecker.git
         tag: v0.2.0
-        commit: 0000000000000000000000000000000000000000
+        commit: 7941352678c20ba5a62517f58064bad6c467554e
       - cargo-sources.json
