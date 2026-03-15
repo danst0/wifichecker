@@ -150,6 +150,11 @@ fn build_ui(
         .tooltip_text("Calibrate scale (click two points)")
         .group(&mode_measure)
         .build();
+    let mode_origin = ToggleButton::builder()
+        .icon_name("mark-location-symbolic")
+        .tooltip_text("Set origin (0, 0) — click to place")
+        .group(&mode_measure)
+        .build();
 
     let clear_canvas_btn = Button::builder()
         .icon_name("edit-clear-symbolic")
@@ -192,6 +197,7 @@ fn build_ui(
     draw_bar.append(&mode_measure);
     draw_bar.append(&mode_draw);
     draw_bar.append(&mode_calib);
+    draw_bar.append(&mode_origin);
     draw_bar.append(&Separator::new(Orientation::Vertical));
     draw_bar.append(&clear_canvas_btn);
     draw_bar.append(&Separator::new(Orientation::Vertical));
@@ -252,6 +258,12 @@ fn build_ui(
         let fp = floor_plan.clone();
         mode_calib.connect_toggled(move |btn| {
             if btn.is_active() { fp.set_draw_mode(DrawMode::Calibrate); }
+        });
+    }
+    {
+        let fp = floor_plan.clone();
+        mode_origin.connect_toggled(move |btn| {
+            if btn.is_active() { fp.set_draw_mode(DrawMode::SetOrigin); }
         });
     }
 
@@ -457,10 +469,12 @@ fn build_ui(
                 let Ok(real_m) = text.trim().parse::<f64>() else { return; };
                 if real_m <= 0.0 { return; }
 
-                let dx = bx - ax;
-                let dy = by - ay;
-                let rel_dist = (dx * dx + dy * dy).sqrt();
-                let scale = rel_dist / real_m;
+                let w = fp2.widget.width() as f64;
+                let h = fp2.widget.height() as f64;
+                let dx = (bx - ax) * w;
+                let dy = (by - ay) * h;
+                let px_dist = (dx * dx + dy * dy).sqrt();
+                let scale = px_dist / real_m;
 
                 fp2.set_scale(scale, (ax, ay), (bx, by));
 

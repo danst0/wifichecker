@@ -16,6 +16,8 @@ pub enum DrawMode {
     Draw,
     /// Click two points to calibrate the scale
     Calibrate,
+    /// Click to set the coordinate origin (0, 0)
+    SetOrigin,
 }
 
 #[derive(Clone)]
@@ -46,6 +48,9 @@ struct FloorPlanState {
     calib_b: Option<(f64, f64)>,
     scale_px_per_m: Option<f64>,
 
+    // Origin (0,0) marker
+    origin: Option<(f64, f64)>,  // relative coords
+
     // Grid
     show_grid: bool,
     grid_spacing_m: f64,             // visual grid line spacing
@@ -71,7 +76,7 @@ struct FloorPlanState {
 
     // Callbacks
     on_measure_click: Option<Box<dyn Fn(f64, f64)>>,
-    on_calibration_complete: Option<Box<dyn Fn(f64, f64, f64, f64)>>,
+    on_calibration_complete: Option<Rc<dyn Fn(f64, f64, f64, f64)>>,
     on_draw_complete: Option<Box<dyn Fn()>>,
 }
 
@@ -106,6 +111,7 @@ impl FloorPlanView {
             calib_a: None,
             calib_b: None,
             scale_px_per_m: None,
+            origin: None,
             show_grid: true,
             grid_spacing_m: 1.0,
             measurement_grid_spacing_m: 1.0,
@@ -170,6 +176,10 @@ impl FloorPlanView {
                             cb(rx, ry);
                         }
                     }
+                    DrawMode::SetOrigin => {
+                        let (cx, cy) = widget_to_canvas(&s, x, y);
+                        s.origin = Some((cx / w, cy / h));
+                    }
                     DrawMode::Calibrate => {
                         let (cx, cy) = widget_to_canvas(&s, x, y);
                         let rx = cx / w;
@@ -181,18 +191,10 @@ impl FloorPlanView {
                             s.calib_b = Some((rx, ry));
                             let a = s.calib_a.unwrap();
                             let b = (rx, ry);
-                            let cb = s.on_calibration_complete.as_ref().map(|_f| {
-                                // collect arguments for calling outside borrow
-                                (a.0, a.1, b.0, b.1)
-                            });
+                            let cb = s.on_calibration_complete.clone();
                             drop(s);
-                            if let Some((ax, ay, bx, by)) = cb {
-                                // caller will read these via get_calib_points()
-                                // and show the dialog
-                                let s2 = state.borrow();
-                                if let Some(ref cb) = s2.on_calibration_complete {
-                                    cb(ax, ay, bx, by);
-                                }
+                            if let Some(cb) = cb {
+                                cb(a.0, a.1, b.0, b.1);
                             }
                         } else {
                             // Reset and start again
@@ -528,11 +530,25 @@ impl FloorPlanView {
     // ── Draw mode ──────────────────────────────────────────────────────────
 
     pub fn set_draw_mode(&self, mode: DrawMode) {
-        self.state.borrow_mut().mode = mode;
+        let mut s = self.state.borrow_mut();
+        if mode == DrawMode::Calibrate {
+            s.calib_a = None;
+            s.calib_b = None;
+        }
+        s.mode = mode;
     }
 
     pub fn set_stroke_color(&self, r: f64, g: f64, b: f64) {
         self.state.borrow_mut().stroke_color = (r, g, b);
+    }
+
+    pub fn set_origin(&self, origin: Option<(f64, f64)>) {
+        self.state.borrow_mut().origin = origin;
+        self.widget.queue_draw();
+    }
+
+    pub fn get_origin(&self) -> Option<(f64, f64)> {
+        self.state.borrow().origin
     }
 
     pub fn clear_canvas(&self) {
@@ -619,7 +635,7 @@ impl FloorPlanView {
     }
 
     pub fn set_on_calibration_complete<F: Fn(f64, f64, f64, f64) + 'static>(&self, cb: F) {
-        self.state.borrow_mut().on_calibration_complete = Some(Box::new(cb));
+        self.state.borrow_mut().on_calibration_complete = Some(Rc::new(cb));
     }
 
     pub fn set_on_draw_complete<F: Fn() + 'static>(&self, cb: F) {
@@ -685,24 +701,7 @@ fn draw_all(state: &FloorPlanState, ctx: &Context, w: i32, h: i32) {
     ctx.translate(state.pan_x, state.pan_y);
     ctx.scale(state.zoom, state.zoom);
 
-    // 2. Grid (behind the floor plan image)
-    if state.show_grid {
-        // Compute the visible canvas-space rectangle so the grid extends to fill it.
-        let vx0 = -state.pan_x / state.zoom;
-        let vy0 = -state.pan_y / state.zoom;
-        let vx1 = (wf - state.pan_x) / state.zoom;
-        let vy1 = (hf - state.pan_y) / state.zoom;
-        draw_grid(ctx, vx0, vy0, vx1, vy1, state.scale_px_per_m, state.grid_spacing_m);
-    }
-
-    // 2.5 Hover cell highlight (Measure mode only, uses measurement grid)
-    if state.mode == DrawMode::Measure {
-        if let Some((px, py)) = state.hover_pos {
-            draw_hover_highlight(ctx, px, py, state.scale_px_per_m, state.measurement_grid_spacing_m);
-        }
-    }
-
-    // 3. Floor plan image
+    // 2. Floor plan image (dimmed, rendered before the grid so the grid appears on top)
     if let Some(ref surface) = state.image {
         let img_w = surface.width() as f64;
         let img_h = surface.height() as f64;
@@ -714,8 +713,26 @@ fn draw_all(state: &FloorPlanState, ctx: &Context, w: i32, h: i32) {
         ctx.translate(ox, oy);
         ctx.scale(scale, scale);
         ctx.set_source_surface(surface, 0.0, 0.0).unwrap();
-        ctx.paint().unwrap();
+        ctx.paint_with_alpha(0.55).unwrap();
         ctx.restore().unwrap();
+    }
+
+    // 3. Grid (now above the floor plan image)
+    if state.show_grid {
+        // Compute the visible canvas-space rectangle so the grid extends to fill it.
+        let vx0 = -state.pan_x / state.zoom;
+        let vy0 = -state.pan_y / state.zoom;
+        let vx1 = (wf - state.pan_x) / state.zoom;
+        let vy1 = (hf - state.pan_y) / state.zoom;
+        let origin_px = state.origin.map(|(rx, ry)| (rx * wf, ry * hf));
+        draw_grid(ctx, vx0, vy0, vx1, vy1, state.scale_px_per_m, state.grid_spacing_m, origin_px);
+    }
+
+    // 3.5 Hover cell highlight (Measure mode only, uses measurement grid)
+    if state.mode == DrawMode::Measure {
+        if let Some((px, py)) = state.hover_pos {
+            draw_hover_highlight(ctx, px, py, state.scale_px_per_m, state.measurement_grid_spacing_m);
+        }
     }
 
     // 4. Freehand drawing canvas
@@ -745,10 +762,20 @@ fn draw_all(state: &FloorPlanState, ctx: &Context, w: i32, h: i32) {
     // 6. Calibration visualization
     draw_calibration(ctx, wf, hf, state);
 
+    // 6.5 Origin marker
+    draw_origin(ctx, wf, hf, state);
+
     // 7. Hover tooltip
-    if state.tooltip_visible && state.mode == DrawMode::Measure {
+    if state.tooltip_visible {
         if let Some((px, py)) = state.hover_pos {
-            draw_tooltip(ctx, px, py, wf, hf, "Click to take measurement");
+            let text = match state.mode {
+                DrawMode::Measure => Some("Click to take measurement"),
+                DrawMode::SetOrigin => Some("Click to place origin (0, 0)"),
+                _ => None,
+            };
+            if let Some(t) = text {
+                draw_tooltip(ctx, px, py, wf, hf, t);
+            }
         }
     }
 
@@ -756,16 +783,19 @@ fn draw_all(state: &FloorPlanState, ctx: &Context, w: i32, h: i32) {
     ctx.restore().unwrap();
 }
 
-fn draw_grid(ctx: &Context, x0: f64, y0: f64, x1: f64, y1: f64, scale_px_per_m: Option<f64>, spacing_m: f64) {
+fn draw_grid(ctx: &Context, x0: f64, y0: f64, x1: f64, y1: f64, scale_px_per_m: Option<f64>, spacing_m: f64, origin: Option<(f64, f64)>) {
     let px_step = grid_px_step(scale_px_per_m, spacing_m);
     if px_step < 8.0 { return; }
+
+    // Anchor grid lines to the origin if one is set, otherwise to canvas (0,0).
+    let (ox, oy) = origin.unwrap_or((0.0, 0.0));
 
     ctx.save().unwrap();
     ctx.set_source_rgba(0.5, 0.7, 1.0, 0.18);
     ctx.set_line_width(0.5);
 
     // Start at the first grid line at or before the visible left/top edge.
-    let first_x = (x0 / px_step).floor() * px_step;
+    let first_x = ox + ((x0 - ox) / px_step).floor() * px_step;
     let mut x = first_x;
     while x <= x1 {
         ctx.move_to(x, y0);
@@ -773,7 +803,7 @@ fn draw_grid(ctx: &Context, x0: f64, y0: f64, x1: f64, y1: f64, scale_px_per_m: 
         let _ = ctx.stroke();
         x += px_step;
     }
-    let first_y = (y0 / px_step).floor() * px_step;
+    let first_y = oy + ((y0 - oy) / px_step).floor() * px_step;
     let mut y = first_y;
     while y <= y1 {
         ctx.move_to(x0, y);
@@ -782,12 +812,12 @@ fn draw_grid(ctx: &Context, x0: f64, y0: f64, x1: f64, y1: f64, scale_px_per_m: 
         y += px_step;
     }
 
-    // Axis labels
+    // Axis labels — values are relative to the origin.
     ctx.set_source_rgba(0.7, 0.9, 1.0, 0.55);
     ctx.set_font_size(10.0);
     let mut x = first_x;
     while x <= x1 {
-        let col = (x / px_step).round() as i64;
+        let col = ((x - ox) / px_step).round() as i64;
         if col != 0 {
             let label = format!("{} m", col as f64 * spacing_m);
             ctx.move_to(x + 2.0, y0 + 12.0);
@@ -797,7 +827,7 @@ fn draw_grid(ctx: &Context, x0: f64, y0: f64, x1: f64, y1: f64, scale_px_per_m: 
     }
     let mut y = first_y;
     while y <= y1 {
-        let row = (y / px_step).round() as i64;
+        let row = -((y - oy) / px_step).round() as i64;
         if row != 0 {
             let label = format!("{} m", row as f64 * spacing_m);
             ctx.move_to(x0 + 2.0, y - 2.0);
@@ -970,6 +1000,36 @@ fn draw_calibration(ctx: &Context, w: f64, h: f64, state: &FloorPlanState) {
             let _ = ctx.show_text(&label);
         }
     }
+}
+
+fn draw_origin(ctx: &Context, w: f64, h: f64, state: &FloorPlanState) {
+    let Some((rx, ry)) = state.origin else { return };
+    let px = rx * w;
+    let py = ry * h;
+    const ARM: f64 = 18.0;
+
+    ctx.save().unwrap();
+
+    // Cross-hair lines
+    ctx.set_source_rgba(0.0, 1.0, 0.5, 0.9);
+    ctx.set_line_width(1.5);
+    ctx.move_to(px - ARM, py);
+    ctx.line_to(px + ARM, py);
+    let _ = ctx.stroke();
+    ctx.move_to(px, py - ARM);
+    ctx.line_to(px, py + ARM);
+    let _ = ctx.stroke();
+
+    // Centre dot
+    ctx.arc(px, py, 4.0, 0.0, std::f64::consts::TAU);
+    ctx.fill().unwrap();
+
+    // Label
+    ctx.set_font_size(11.0);
+    ctx.move_to(px + 7.0, py - 7.0);
+    let _ = ctx.show_text("(0, 0)");
+
+    ctx.restore().unwrap();
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
