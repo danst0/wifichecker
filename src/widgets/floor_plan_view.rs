@@ -8,6 +8,28 @@ use std::rc::Rc;
 use std::time::Duration;
 use crate::models::Measurement;
 
+#[derive(Clone, Copy)]
+pub enum ColorMetric { SmbMbps, IperfMbps, SignalDbm }
+
+fn value_color(val: f64, min: f64, max: f64) -> (f64, f64, f64) {
+    let t = if max > min { ((val - min) / (max - min)).clamp(0.0, 1.0) } else { 0.5 };
+    if t >= 0.5 { (1.0 - (t - 0.5) * 2.0, 1.0, 0.0) } else { (1.0, t * 2.0, 0.0) }
+}
+
+fn active_metric(measurements: &[Measurement]) -> ColorMetric {
+    if measurements.iter().any(|m| m.smb_mbps.is_some())   { return ColorMetric::SmbMbps; }
+    if measurements.iter().any(|m| m.iperf_mbps.is_some()) { return ColorMetric::IperfMbps; }
+    ColorMetric::SignalDbm
+}
+
+fn metric_value(m: &Measurement, metric: ColorMetric) -> Option<f64> {
+    match metric {
+        ColorMetric::SmbMbps   => m.smb_mbps,
+        ColorMetric::IperfMbps => m.iperf_mbps,
+        ColorMetric::SignalDbm => Some(m.signal_dbm as f64),
+    }
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub enum DrawMode {
     /// Click to place a WiFi measurement point
@@ -32,6 +54,9 @@ struct FloorPlanState {
     measurements: Vec<Measurement>,
     show_heatmap: bool,
     heatmap_alpha: f64,
+    color_metric: ColorMetric,
+    color_min: f64,
+    color_max: f64,
 
     // Draw mode
     mode: DrawMode,
@@ -95,6 +120,9 @@ impl FloorPlanView {
             measurements: Vec::new(),
             show_heatmap: true,
             heatmap_alpha: 0.55,
+            color_metric: ColorMetric::SignalDbm,
+            color_min: -90.0,
+            color_max: -30.0,
             mode: DrawMode::Measure,
             canvas: None,
             last_draw_pos: None,
@@ -518,7 +546,23 @@ impl FloorPlanView {
     }
 
     pub fn set_measurements(&self, measurements: Vec<Measurement>) {
-        self.state.borrow_mut().measurements = measurements;
+        let metric = active_metric(&measurements);
+        let values: Vec<f64> = measurements.iter()
+            .filter_map(|m| metric_value(m, metric))
+            .collect();
+        let (min, max) = if values.is_empty() {
+            (-90.0, -30.0)
+        } else {
+            let lo = values.iter().cloned().fold(f64::MAX, f64::min);
+            let hi = values.iter().cloned().fold(f64::MIN, f64::max);
+            if (hi - lo).abs() < 1.0 { (lo - 5.0, hi + 5.0) } else { (lo, hi) }
+        };
+        let mut state = self.state.borrow_mut();
+        state.measurements = measurements;
+        state.color_metric = metric;
+        state.color_min = min;
+        state.color_max = max;
+        drop(state);
         self.widget.queue_draw();
     }
 
@@ -600,6 +644,16 @@ impl FloorPlanView {
     pub fn get_calib_points(&self) -> (Option<(f64, f64)>, Option<(f64, f64)>) {
         let s = self.state.borrow();
         (s.calib_a, s.calib_b)
+    }
+
+    /// Clear all calibration state (points A/B and the computed scale).
+    pub fn clear_calibration(&self) {
+        let mut s = self.state.borrow_mut();
+        s.calib_a = None;
+        s.calib_b = None;
+        s.scale_px_per_m = None;
+        drop(s);
+        self.widget.queue_draw();
     }
 
     // ── Grid ───────────────────────────────────────────────────────────────
@@ -756,7 +810,7 @@ fn draw_all(state: &FloorPlanState, ctx: &Context, w: i32, h: i32) {
 
     // 5. Measurement cell coloring (replaces heatmap and individual dots)
     if state.show_heatmap && !state.measurements.is_empty() {
-        draw_measurement_cells(ctx, wf, hf, &state.measurements, state.scale_px_per_m, state.measurement_grid_spacing_m);
+        draw_measurement_cells(ctx, wf, hf, &state.measurements, state.scale_px_per_m, state.measurement_grid_spacing_m, state.color_metric, state.color_min, state.color_max);
     }
 
     // 6. Calibration visualization
@@ -853,16 +907,23 @@ fn draw_measurement_cells(
     measurements: &[Measurement],
     scale_px_per_m: Option<f64>,
     spacing_m: f64,
+    metric: ColorMetric,
+    min: f64,
+    max: f64,
 ) {
     let px_step = grid_px_step(scale_px_per_m, spacing_m);
     ctx.save().unwrap();
     for m in measurements {
+        let val = match metric_value(m, metric) {
+            Some(v) => v,
+            None => continue,
+        };
         let px = m.x * w;
         let py = m.y * h;
         // The measurement is stored at cell center; find cell origin
         let cell_x = (px / px_step).floor() * px_step;
         let cell_y = (py / px_step).floor() * px_step;
-        let (r, g, b) = signal_color(m.signal_dbm);
+        let (r, g, b) = value_color(val, min, max);
         ctx.set_source_rgba(r, g, b, 0.72);
         ctx.rectangle(cell_x, cell_y, px_step, px_step);
         ctx.fill().unwrap();
@@ -1097,7 +1158,3 @@ fn pdf_page_to_surface(path: &str, page_idx: u32) -> Option<ImageSurface> {
     Some(surface)
 }
 
-fn signal_color(dbm: i32) -> (f64, f64, f64) {
-    let t = ((dbm + 90) as f64 / 60.0).clamp(0.0, 1.0);
-    if t >= 0.5 { (1.0 - (t - 0.5) * 2.0, 1.0, 0.0) } else { (1.0, t * 2.0, 0.0) }
-}

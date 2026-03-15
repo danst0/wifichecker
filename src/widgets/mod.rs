@@ -1,7 +1,9 @@
 pub mod floor_plan_view;
+pub mod legend_bar;
 pub mod measurement_panel;
 pub mod settings_dialog;
 
 pub use floor_plan_view::FloorPlanView;
+pub use legend_bar::LegendBar;
 pub use measurement_panel::MeasurementPanel;
 pub use settings_dialog::SettingsDialog;

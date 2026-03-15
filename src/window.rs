@@ -13,7 +13,7 @@ use crate::models::{AppSettings, Floor, Measurement, Project};
 use crate::persistence::{JsonStore, SettingsStore};
 use crate::persistence::json_store::{drawings_dir, ensure_config_dirs};
 use crate::services::{IperfClient, SmbTester, WifiInfo, WifiScanner};
-use crate::widgets::{FloorPlanView, MeasurementPanel, SettingsDialog};
+use crate::widgets::{FloorPlanView, LegendBar, MeasurementPanel, SettingsDialog};
 use crate::widgets::floor_plan_view::DrawMode;
 
 struct MeasureResult {
@@ -222,7 +222,14 @@ fn build_ui(
     floor_plan.set_grid_spacing(settings.borrow().grid_spacing_m);
     floor_plan.set_measurement_grid_spacing(settings.borrow().measurement_grid_spacing_m);
     floor_plan.set_snap_to_grid(settings.borrow().snap_to_grid);
-    body.append(&floor_plan.widget);
+
+    let legend = LegendBar::new();
+    let fp_col = GtkBox::new(Orientation::Vertical, 0);
+    fp_col.set_hexpand(true);
+    fp_col.set_vexpand(true);
+    fp_col.append(&floor_plan.widget);
+    fp_col.append(&legend.widget);
+    body.append(&fp_col);
 
     let sidebar = GtkBox::new(Orientation::Vertical, 6);
     sidebar.set_width_request(290);
@@ -318,6 +325,7 @@ fn build_ui(
         let panel = panel.clone();
         let overlay_ref = overlay.clone();
         let settings = settings.clone();
+        let legend = legend.clone();
 
         floor_plan.set_on_measure_click(move |rx, ry| {
             let (iperf_enabled, iperf_server, iperf_port, iperf_dur, iperf_streams,
@@ -375,6 +383,7 @@ fn build_ui(
             let fp2 = fp.clone();
             let panel3 = panel.clone();
             let overlay2 = overlay_ref.clone();
+            let legend2 = legend.clone();
 
             glib::spawn_future_local(async move {
                 let Ok(result) = recv.recv().await else { return; };
@@ -421,6 +430,7 @@ fn build_ui(
                 };
 
                 fp2.set_measurements(measurements.clone());
+                legend2.set_measurements(&measurements);
                 panel3.set_measurements(panel_measurements);
                 panel3.set_throughput_unit(unit);
                 panel3.update_current_wifi(
@@ -509,6 +519,7 @@ fn build_ui(
         let fp = floor_plan.clone();
         let panel = panel.clone();
         let panel2 = panel.clone();
+        let legend = legend.clone();
         panel.set_on_delete(move |id| {
             let measurements = {
                 let mut s = state.borrow_mut();
@@ -521,6 +532,7 @@ fn build_ui(
                 }
             };
             fp.set_measurements(measurements.clone());
+            legend.set_measurements(&measurements);
             panel2.set_measurements(measurements);
             auto_save(&fp, &state);
         });
@@ -534,6 +546,7 @@ fn build_ui(
         let overlay_ref = overlay.clone();
         let window_ref = window.clone();
         let panel_ref = panel.clone();
+        let legend = legend.clone();
         panel_ref.set_on_delete_all(move || {
             let n_floors = state.borrow().project.floors.len();
             let dialog = MessageDialog::builder()
@@ -560,6 +573,7 @@ fn build_ui(
             let fp2 = fp.clone();
             let panel2 = panel.clone();
             let overlay2 = overlay_ref.clone();
+            let legend2 = legend.clone();
             dialog.choose(gtk4::gio::Cancellable::NONE, move |response| {
                 match response.as_str() {
                     "current" => {
@@ -571,6 +585,7 @@ fn build_ui(
                             }
                         }
                         fp2.set_measurements(vec![]);
+                        legend2.set_measurements(&[]);
                         panel2.set_measurements(vec![]);
                         auto_save(&fp2, &state2);
                         overlay2.add_toast(Toast::new("Measurements deleted"));
@@ -583,6 +598,7 @@ fn build_ui(
                             }
                         }
                         fp2.set_measurements(vec![]);
+                        legend2.set_measurements(&[]);
                         panel2.set_measurements(vec![]);
                         auto_save(&fp2, &state2);
                         overlay2.add_toast(Toast::new("All measurements deleted"));
@@ -639,6 +655,7 @@ fn build_ui(
         let overlay_ref = overlay.clone();
         let window_ref = window.clone();
         let suppress = suppress_floor_change.clone();
+        let legend = legend.clone();
         edit_floor_btn.connect_clicked(move |_| {
             let (current_name, n_floors, current_idx) = {
                 let s = state.borrow();
@@ -680,6 +697,7 @@ fn build_ui(
             let overlay2      = overlay_ref.clone();
             let entry2        = entry.clone();
             let suppress2     = suppress.clone();
+            let legend2       = legend.clone();
 
             dialog.choose(gtk4::gio::Cancellable::NONE, move |response| {
                 match response.as_str() {
@@ -729,8 +747,9 @@ fn build_ui(
                             )
                         };
 
-                        fp2.clear_canvas();
                         fp2.set_image("");
+                        fp2.clear_canvas();
+                        fp2.clear_calibration();
                         if let Some(ref p) = image_path {
                             if p.to_lowercase().ends_with(".pdf") {
                                 fp2.set_pdf(p, pdf_page.unwrap_or(0));
@@ -741,11 +760,10 @@ fn build_ui(
                         if let Some(p) = drawing_path { fp2.load_canvas(std::path::Path::new(&p)); }
                         if let (Some(sc), Some(a), Some(b)) = (scale, calib_a, calib_b) {
                             fp2.set_scale(sc, a, b);
-                        } else {
-                            fp2.set_scale_px_per_m(None);
                         }
                         fp2.set_origin(origin);
                         fp2.set_measurements(measurements.clone());
+                        legend2.set_measurements(&measurements);
                         panel2.set_measurements(measurements);
 
                         auto_save(&fp2, &state2);
@@ -763,6 +781,7 @@ fn build_ui(
         let fp = floor_plan.clone();
         let panel = panel.clone();
         let suppress = suppress_floor_change.clone();
+        let legend = legend.clone();
         floor_dropdown.connect_selected_notify(move |dd| {
             if suppress.get() { return; }
             let new_idx = dd.selected() as usize;
@@ -786,6 +805,9 @@ fn build_ui(
                 )
             };
 
+            fp.set_image("");
+            fp.clear_canvas();
+            fp.clear_calibration();
             if let Some(ref p) = image_path {
                 if p.to_lowercase().ends_with(".pdf") {
                     fp.set_pdf(p, pdf_page.unwrap_or(0));
@@ -796,11 +818,10 @@ fn build_ui(
             if let Some(p) = drawing_path { fp.load_canvas(std::path::Path::new(&p)); }
             if let (Some(s), Some(a), Some(b)) = (scale, calib_a, calib_b) {
                 fp.set_scale(s, a, b);
-            } else {
-                fp.set_scale_px_per_m(None);
             }
             fp.set_origin(origin);
             fp.set_measurements(measurements.clone());
+            legend.set_measurements(&measurements);
             panel.set_measurements(measurements);
         });
     }
@@ -948,9 +969,11 @@ fn build_ui(
             }
             floor_plan.set_origin(origin);
             floor_plan.set_measurements(measurements.clone());
+            legend.set_measurements(&measurements);
             panel.set_measurements(measurements);
         } else {
             floor_plan.set_measurements(vec![]);
+            legend.set_measurements(&[]);
             panel.set_measurements(vec![]);
         }
     }
