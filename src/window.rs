@@ -86,6 +86,7 @@ fn auto_save(fp: &FloorPlanView, state: &Rc<RefCell<AppState>>) {
         let mut s = state.borrow_mut();
         if let Some(floor) = s.project.floors.get_mut(idx) {
             floor.drawing_path = Some(canvas_path.to_string_lossy().to_string());
+            floor.origin = fp.get_origin();
         }
     }
     let project = state.borrow().project.clone();
@@ -712,7 +713,7 @@ fn build_ui(
                         suppress2.set(false);
 
                         // Load the replacement floor into the UI
-                        let (measurements, image_path, drawing_path, scale, calib_a, calib_b, pdf_page) = {
+                        let (measurements, image_path, drawing_path, scale, calib_a, calib_b, pdf_page, origin) = {
                             let s = state2.borrow();
                             let floor = &s.project.floors[new_idx];
                             (
@@ -723,6 +724,7 @@ fn build_ui(
                                 floor.calib_point_a,
                                 floor.calib_point_b,
                                 floor.pdf_page,
+                                floor.origin,
                             )
                         };
 
@@ -741,6 +743,7 @@ fn build_ui(
                         } else {
                             fp2.set_scale_px_per_m(None);
                         }
+                        fp2.set_origin(origin);
                         fp2.set_measurements(measurements.clone());
                         panel2.set_measurements(measurements);
 
@@ -765,7 +768,7 @@ fn build_ui(
             // Auto-save the floor being left
             auto_save(&fp, &state);
 
-            let (measurements, image_path, drawing_path, scale, calib_a, calib_b, pdf_page) = {
+            let (measurements, image_path, drawing_path, scale, calib_a, calib_b, pdf_page, origin) = {
                 let mut s = state.borrow_mut();
                 if new_idx >= s.project.floors.len() { return; }
                 s.current_floor = new_idx;
@@ -778,6 +781,7 @@ fn build_ui(
                     floor.calib_point_a,
                     floor.calib_point_b,
                     floor.pdf_page,
+                    floor.origin,
                 )
             };
 
@@ -794,6 +798,7 @@ fn build_ui(
             } else {
                 fp.set_scale_px_per_m(None);
             }
+            fp.set_origin(origin);
             fp.set_measurements(measurements.clone());
             panel.set_measurements(measurements);
         });
@@ -917,6 +922,7 @@ fn build_ui(
                 f.calib_point_a,
                 f.calib_point_b,
                 f.pdf_page,
+                f.origin,
             ));
             (names, first)
         }; // state borrow fully released here
@@ -927,7 +933,7 @@ fn build_ui(
         }
 
         // Load first floor into view
-        if let Some((measurements, image_path, drawing_path, scale, calib_a, calib_b, pdf_page)) = first_floor_data {
+        if let Some((measurements, image_path, drawing_path, scale, calib_a, calib_b, pdf_page, origin)) = first_floor_data {
             if let Some(ref p) = image_path {
                 if p.to_lowercase().ends_with(".pdf") {
                     floor_plan.set_pdf(p, pdf_page.unwrap_or(0));
@@ -939,6 +945,7 @@ fn build_ui(
             if let (Some(sc), Some(a), Some(b)) = (scale, calib_a, calib_b) {
                 floor_plan.set_scale(sc, a, b);
             }
+            floor_plan.set_origin(origin);
             floor_plan.set_measurements(measurements.clone());
             panel.set_measurements(measurements);
         } else {

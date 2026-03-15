@@ -69,7 +69,12 @@ jobs:
           bundle: wifichecker.flatpak
           manifest-path: ${{ env.APP_ID }}.yml
           cache-key: flatpak-builder-${{ github.sha }}
-          upload-artifact: true
+          upload-artifact: false
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: wifichecker.flatpak
+          path: wifichecker.flatpak
 
   release:
     name: GitHub Release

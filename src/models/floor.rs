@@ -22,6 +22,9 @@ pub struct Floor {
     /// Selected PDF page (0-based); only relevant when image_path points to a .pdf file
     #[serde(default)]
     pub pdf_page: Option<u32>,
+    /// Origin (zero point) for the grid/axis overlay, in relative image coords (0..1)
+    #[serde(default)]
+    pub origin: Option<(f64, f64)>,
 }
 
 impl Floor {
@@ -35,6 +38,7 @@ impl Floor {
             calib_point_a: None,
             calib_point_b: None,
             pdf_page: None,
+            origin: None,
         }
     }
 
